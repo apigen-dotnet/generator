@@ -1,2 +1,5 @@
 <Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Apigen.Generator/Apigen.Generator.csproj" />
+  </Folder>
 </Solution>

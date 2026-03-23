@@ -1,0 +1,247 @@
+using System.ComponentModel;
+using System.Reflection;
+using System.Runtime.Serialization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Apigen.Generator.Services;
+
+/// <summary>
+/// Smart JSON converter for enhanced enums that handles both raw values and enum names
+/// </summary>
+public class SmartEnumConverter<TEnum> : JsonConverter<TEnum?> where TEnum : struct, Enum
+{
+  private readonly Dictionary<string, TEnum> _stringToEnum;
+  private readonly Dictionary<TEnum, string> _enumToString;
+  private readonly TEnum? _unknownValue;
+
+  public SmartEnumConverter()
+  {
+    _stringToEnum = BuildStringToEnumMapping();
+    _enumToString = BuildEnumToStringMapping();
+    _unknownValue = GetUnknownValue();
+  }
+
+  public override TEnum? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+  {
+    return reader.TokenType switch
+    {
+      JsonTokenType.String => ParseStringValue(reader.GetString()),
+      JsonTokenType.Number => ParseNumberValue(reader),
+      JsonTokenType.Null => null,
+      _ => _unknownValue,
+    };
+  }
+
+  public override void Write(Utf8JsonWriter writer, TEnum? value, JsonSerializerOptions options)
+  {
+    if (value == null)
+    {
+      writer.WriteNullValue();
+      return;
+    }
+
+    // Write the raw value (what the API expects)
+    if (_enumToString.TryGetValue(value.Value, out string? rawValue))
+    {
+      // Try to write as number if possible
+      if (int.TryParse(rawValue, out int intValue))
+      {
+        writer.WriteStringValue(rawValue); // Keep as string for consistency
+      }
+      else
+      {
+        writer.WriteStringValue(rawValue);
+      }
+    }
+    else
+    {
+      // Fallback to enum name
+      writer.WriteStringValue(value.ToString());
+    }
+  }
+
+  private TEnum? ParseStringValue(string? value)
+  {
+    if (string.IsNullOrEmpty(value))
+    {
+      return null;
+    }
+
+    // Try exact match first (handles both raw values and enum names)
+    if (_stringToEnum.TryGetValue(value, out TEnum exact))
+    {
+      return exact;
+    }
+
+    // Try numeric string conversion
+    if (int.TryParse(value, out int numValue))
+    {
+      return ParseNumericValue(numValue);
+    }
+
+    // Try case-insensitive name match
+    if (Enum.TryParse<TEnum>(value, true, out TEnum parsed))
+    {
+      return parsed;
+    }
+
+    return _unknownValue;
+  }
+
+  private TEnum? ParseNumberValue(Utf8JsonReader reader)
+  {
+    if (reader.TryGetInt32(out int intValue))
+    {
+      return ParseNumericValue(intValue);
+    }
+
+    return _unknownValue;
+  }
+
+  private TEnum? ParseNumericValue(int value)
+  {
+    // Try direct cast if defined
+    if (Enum.IsDefined(typeof(TEnum), value))
+    {
+      return (TEnum) (object) value;
+    }
+
+    // Try with underscore prefix (_1, _2, etc.)
+    string underscoreName = $"_{value}";
+    if (_stringToEnum.TryGetValue(underscoreName, out TEnum prefixed))
+    {
+      return prefixed;
+    }
+
+    return _unknownValue;
+  }
+
+  private Dictionary<string, TEnum> BuildStringToEnumMapping()
+  {
+    Dictionary<string, TEnum> mapping = new(StringComparer.OrdinalIgnoreCase);
+
+    foreach (TEnum enumValue in Enum.GetValues<TEnum>())
+    {
+      string enumName = enumValue.ToString();
+
+      // Add the enum name itself
+      mapping[enumName] = enumValue;
+
+      // Add EnumMember value if present
+      FieldInfo? memberInfo = typeof(TEnum).GetField(enumName);
+      EnumMemberAttribute? enumMemberAttr = memberInfo?.GetCustomAttribute<EnumMemberAttribute>();
+      if (enumMemberAttr?.Value != null)
+      {
+        mapping[enumMemberAttr.Value] = enumValue;
+      }
+
+      // For numeric enum names like _1, also map to "1"
+      if (enumName.StartsWith("_") && int.TryParse(enumName.Substring(1), out int numericValue))
+      {
+        mapping[numericValue.ToString()] = enumValue;
+      }
+    }
+
+    return mapping;
+  }
+
+  private Dictionary<TEnum, string> BuildEnumToStringMapping()
+  {
+    Dictionary<TEnum, string> mapping = new();
+
+    foreach (TEnum enumValue in Enum.GetValues<TEnum>())
+    {
+      string enumName = enumValue.ToString();
+
+      // Check for EnumMember attribute first (this is the raw API value)
+      FieldInfo? memberInfo = typeof(TEnum).GetField(enumName);
+      EnumMemberAttribute? enumMemberAttr = memberInfo?.GetCustomAttribute<EnumMemberAttribute>();
+
+      if (enumMemberAttr?.Value != null)
+      {
+        mapping[enumValue] = enumMemberAttr.Value;
+      }
+      else if (enumName.StartsWith("_") && int.TryParse(enumName.Substring(1), out int numericValue))
+      {
+        // For _1 style enums, use the numeric value
+        mapping[enumValue] = numericValue.ToString();
+      }
+      else
+      {
+        // Use the enum name as-is
+        mapping[enumValue] = enumName;
+      }
+    }
+
+    return mapping;
+  }
+
+  private TEnum? GetUnknownValue()
+  {
+    // Look for a member named "Unknown"
+    if (Enum.TryParse<TEnum>("Unknown", true, out TEnum unknown))
+    {
+      return unknown;
+    }
+
+    // Look for a member with value -1 (common unknown pattern)
+    if (Enum.IsDefined(typeof(TEnum), -1))
+    {
+      return (TEnum) (object) -1;
+    }
+
+    // Return the first enum value as default
+    TEnum[] values = Enum.GetValues<TEnum>();
+    return values.Length > 0 ? values[0] : null;
+  }
+}
+
+/// <summary>
+/// Non-nullable version of the smart enum converter
+/// </summary>
+public class SmartEnumConverterNonNullable<TEnum> : JsonConverter<TEnum> where TEnum : struct, Enum
+{
+  private readonly SmartEnumConverter<TEnum> _nullableConverter = new();
+
+  public override TEnum Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+  {
+    return _nullableConverter.Read(ref reader, typeToConvert, options) ?? default(TEnum);
+  }
+
+  public override void Write(Utf8JsonWriter writer, TEnum value, JsonSerializerOptions options)
+  {
+    _nullableConverter.Write(writer, value, options);
+  }
+}
+
+/// <summary>
+/// Factory for creating smart enum converters
+/// </summary>
+public class SmartEnumConverterFactory : JsonConverterFactory
+{
+  public override bool CanConvert(Type typeToConvert)
+  {
+    return typeToConvert.IsEnum ||
+           (typeToConvert.IsGenericType &&
+            typeToConvert.GetGenericTypeDefinition() == typeof(Nullable<>) &&
+            typeToConvert.GetGenericArguments()[0].IsEnum);
+  }
+
+  public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+  {
+    if (typeToConvert.IsEnum)
+    {
+      // Non-nullable enum
+      return (JsonConverter) Activator.CreateInstance(
+        typeof(SmartEnumConverterNonNullable<>).MakeGenericType(typeToConvert))!;
+    }
+    else
+    {
+      // Nullable enum
+      Type enumType = typeToConvert.GetGenericArguments()[0];
+      return (JsonConverter) Activator.CreateInstance(
+        typeof(SmartEnumConverter<>).MakeGenericType(enumType))!;
+    }
+  }
+}
