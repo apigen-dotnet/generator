@@ -10,10 +10,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -36,28 +36,28 @@ jobs:
           files: ./nupkg/*.nupkg
 
       - name: Notify client repos
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.DISPATCH_TOKEN }}
           repository: apigen-dotnet/invoiceninja
           event-type: generator-release
           client-payload: '{"version": "${{ github.ref_name }}"}'
 
-      - uses: peter-evans/repository-dispatch@v3
+      - uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.DISPATCH_TOKEN }}
           repository: apigen-dotnet/keycloak
           event-type: generator-release
           client-payload: '{"version": "${{ github.ref_name }}"}'
 
-      - uses: peter-evans/repository-dispatch@v3
+      - uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.DISPATCH_TOKEN }}
           repository: apigen-dotnet/paperless-ngx
           event-type: generator-release
           client-payload: '{"version": "${{ github.ref_name }}"}'
 
-      - uses: peter-evans/repository-dispatch@v3
+      - uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.DISPATCH_TOKEN }}
           repository: apigen-dotnet/vikunja
