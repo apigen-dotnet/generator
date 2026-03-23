@@ -2,15 +2,19 @@
 
 OpenAPI to C# client generator. Generates strongly-typed API clients with property overrides, smart enums, and custom JSON converter support.
 
-## Installation
+## Usage
+
+### From source (recommended)
+
+```bash
+git clone https://github.com/apigen-dotnet/generator.git
+dotnet run --project generator/src/Apigen.Generator/Apigen.Generator.csproj -- --config my-api.toml
+```
+
+### As dotnet tool
 
 ```bash
 dotnet tool install --global Apigen.Generator
-```
-
-## Usage
-
-```bash
 apigen --config my-api.toml
 ```
 
