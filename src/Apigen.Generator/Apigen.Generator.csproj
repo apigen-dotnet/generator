@@ -13,9 +13,9 @@
     <ToolCommandName>apigen</ToolCommandName>
     <PackageId>Apigen.Generator</PackageId>
     <Version>1.0.0</Version>
-    <Authors>InitializeNL</Authors>
-    <Company>InitializeNL</Company>
-    <Copyright>Copyright (c) 2026 InitializeNL</Copyright>
+    <Authors>Frank Hommers</Authors>
+    <Company>Initialize.nl</Company>
+    <Copyright>Copyright (c) Frank Hommers / Initialize.nl</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/apigen-dotnet/generator</PackageProjectUrl>
     <RepositoryUrl>https://github.com/apigen-dotnet/generator</RepositoryUrl>
