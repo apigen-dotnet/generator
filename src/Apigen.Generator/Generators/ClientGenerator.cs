@@ -92,6 +92,16 @@ public class ClientGenerator
     GeneratedFile smartEnumConverter = GenerateSmartEnumConverter();
     result.RequestFiles.Add(smartEnumConverter);
 
+    // Generate multipart content helper if any operations use multipart/form-data
+    bool hasMultipartOps = analysis.Resources
+      .SelectMany(r => r.Operations)
+      .Any(o => o.RequestContentType == "multipart/form-data");
+    if (hasMultipartOps)
+    {
+      GeneratedFile multipartHelper = GenerateMultipartContentExtensions();
+      result.RequestFiles.Add(multipartHelper);
+    }
+
     // Generate HTTP client logging (if ILogger is enabled)
     if (_options.UseILogger)
     {
@@ -873,14 +883,23 @@ public class ClientGenerator
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
           string paramName = operation.RequestBodyType.ToCamelCase();
-          sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
-          if (_options.UseILogger)
+          if (operation.RequestContentType == "multipart/form-data")
           {
-            sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", json);");
+            sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", \"[multipart/form-data]\");");
+            }
           }
-
-          sb.AppendLine(
-            $"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
+          else
+          {
+            sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", json);");
+            }
+            sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
+          }
           sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PostAsync(url, content);");
         }
         else
@@ -893,14 +912,23 @@ public class ClientGenerator
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
           string paramName = operation.RequestBodyType.ToCamelCase();
-          sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
-          if (_options.UseILogger)
+          if (operation.RequestContentType == "multipart/form-data")
           {
-            sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", json);");
+            sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", \"[multipart/form-data]\");");
+            }
           }
-
-          sb.AppendLine(
-            $"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
+          else
+          {
+            sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", json);");
+            }
+            sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
+          }
           sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PutAsync(url, content);");
         }
         else
@@ -948,6 +976,31 @@ public class ClientGenerator
   private string GenerateResponseProcessor(ApiOperation operation, OpenApiAnalysis analysis, string indent)
   {
     StringBuilder sb = new();
+
+    // Handle binary responses (application/octet-stream, image/*, etc.)
+    if (operation.ResponseType == "Stream")
+    {
+      if (_options.UseILogger)
+      {
+        sb.AppendLine($"{indent}try");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
+        sb.AppendLine($"{indent}}}");
+        sb.AppendLine($"{indent}catch (HttpRequestException ex)");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}  string errorContent = await response.Content.ReadAsStringAsync();");
+        sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, errorContent, ex);");
+        sb.AppendLine($"{indent}  throw;");
+        sb.AppendLine($"{indent}}}");
+      }
+      else
+      {
+        sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
+      }
+
+      sb.AppendLine($"{indent}return await response.Content.ReadAsStreamAsync();");
+      return sb.ToString();
+    }
 
     // Handle void responses (204 No Content or empty body)
     if (operation.ResponseType == "void")
@@ -2228,6 +2281,73 @@ public class ClientGenerator
     return new GeneratedFile
     {
       FileName = "QueryStringExtensions.cs",
+      Content = sb.ToString(),
+    };
+  }
+
+  private GeneratedFile GenerateMultipartContentExtensions()
+  {
+    StringBuilder sb = new();
+    sb.AppendLine("using System.Net.Http;");
+    sb.AppendLine("using System.Reflection;");
+    sb.AppendLine("using System.Text.Json.Serialization;");
+    sb.AppendLine();
+    sb.AppendLine($"namespace {_options.Namespace};");
+    sb.AppendLine();
+    sb.AppendLine("internal static class MultipartContentExtensions");
+    sb.AppendLine("{");
+    sb.AppendLine("  /// <summary>");
+    sb.AppendLine("  /// Converts a DTO object to MultipartFormDataContent for file upload endpoints.");
+    sb.AppendLine("  /// Properties of type byte[] are added as file content, all others as string fields.");
+    sb.AppendLine("  /// Uses JsonPropertyName attribute for field names.");
+    sb.AppendLine("  /// </summary>");
+    sb.AppendLine("  public static MultipartFormDataContent ToMultipartContent(this object dto)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    MultipartFormDataContent content = new();");
+    sb.AppendLine();
+    sb.AppendLine("    foreach (PropertyInfo prop in dto.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))");
+    sb.AppendLine("    {");
+    sb.AppendLine("      object? value = prop.GetValue(dto);");
+    sb.AppendLine("      if (value == null) continue;");
+    sb.AppendLine();
+    sb.AppendLine("      // Use JsonPropertyName attribute for the field name, fall back to property name");
+    sb.AppendLine("      string fieldName = prop.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? prop.Name;");
+    sb.AppendLine();
+    sb.AppendLine("      if (value is byte[] bytes)");
+    sb.AppendLine("      {");
+    sb.AppendLine("        ByteArrayContent fileContent = new(bytes);");
+    sb.AppendLine("        content.Add(fileContent, fieldName, fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("      else if (value is Stream stream)");
+    sb.AppendLine("      {");
+    sb.AppendLine("        StreamContent streamContent = new(stream);");
+    sb.AppendLine("        content.Add(streamContent, fieldName, fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("      else if (value is bool boolValue)");
+    sb.AppendLine("      {");
+    sb.AppendLine("        content.Add(new StringContent(boolValue.ToString().ToLowerInvariant()), fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("      else if (value is DateTime dateTime)");
+    sb.AppendLine("      {");
+    sb.AppendLine("        content.Add(new StringContent(dateTime.ToString(\"O\")), fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("      else if (value is DateTimeOffset dateTimeOffset)");
+    sb.AppendLine("      {");
+    sb.AppendLine("        content.Add(new StringContent(dateTimeOffset.ToString(\"O\")), fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("      else");
+    sb.AppendLine("      {");
+    sb.AppendLine("        content.Add(new StringContent(value.ToString() ?? \"\"), fieldName);");
+    sb.AppendLine("      }");
+    sb.AppendLine("    }");
+    sb.AppendLine();
+    sb.AppendLine("    return content;");
+    sb.AppendLine("  }");
+    sb.AppendLine("}");
+
+    return new GeneratedFile
+    {
+      FileName = "MultipartContentExtensions.cs",
       Content = sb.ToString(),
     };
   }

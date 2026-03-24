@@ -93,7 +93,9 @@ public class ApiOperation
   public OperationType Type { get; set; }
   public List<ApiParameter> Parameters { get; set; } = new();
   public string? RequestBodyType { get; set; }
+  public string RequestContentType { get; set; } = "application/json";
   public string? ResponseType { get; set; }
+  public string ResponseContentType { get; set; } = "application/json";
   public bool ReturnsWrappedResponse { get; set; } = true; // Most endpoints return wrapped responses
 }
 

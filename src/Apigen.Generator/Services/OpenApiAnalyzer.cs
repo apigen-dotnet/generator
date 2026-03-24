@@ -191,7 +191,9 @@ public class OpenApiAnalyzer
           Type = DetermineOperationType(operation.Key, path.Key, tag),
           Parameters = AnalyzeParameters(operation.Value, path.Key, path.Value),
           RequestBodyType = GetRequestBodyType(operation.Value),
+          RequestContentType = GetRequestContentType(operation.Value),
           ResponseType = GetResponseType(operation.Value),
+          ResponseContentType = GetResponseContentType(operation.Value),
         };
 
         resources[tag].Operations.Add(apiOperation);
@@ -425,8 +427,14 @@ public class OpenApiAnalyzer
     KeyValuePair<string, OpenApiResponse>? successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
     if (successResponse?.Key == "204")
     {
-      // 204 No Content should return void (Task with no result)
       return "void";
+    }
+
+    // Check if the response is binary (octet-stream, image/*, etc.)
+    string responseContentType = GetResponseContentType(operation);
+    if (IsBinaryContentType(responseContentType))
+    {
+      return "Stream";
     }
 
     OpenApiResponse? response = successResponse?.Value;
@@ -479,6 +487,27 @@ public class OpenApiAnalyzer
 
     return null;
   }
+
+  private string GetRequestContentType(OpenApiOperation operation)
+  {
+    string? contentType = operation.RequestBody?.Content?.Keys.FirstOrDefault();
+    return contentType ?? "application/json";
+  }
+
+  private string GetResponseContentType(OpenApiOperation operation)
+  {
+    KeyValuePair<string, OpenApiResponse>? successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
+    string? contentType = successResponse?.Value?.Content?.Keys.FirstOrDefault();
+    return contentType ?? "application/json";
+  }
+
+  private bool IsBinaryContentType(string contentType) =>
+    contentType is "application/octet-stream"
+      or "image/jpeg" or "image/png" or "image/gif" or "image/webp"
+      or "audio/mpeg" or "video/mp4"
+      || contentType.StartsWith("image/")
+      || contentType.StartsWith("audio/")
+      || contentType.StartsWith("video/");
 
   private ResponsePattern AnalyzeResponsePatterns(OpenApiDocument document)
   {
