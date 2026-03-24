@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Apigen.Generator/Apigen.Generator.csproj" />
   </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Apigen.Generator.Tests/Apigen.Generator.Tests.csproj" />
+  </Folder>
 </Solution>
