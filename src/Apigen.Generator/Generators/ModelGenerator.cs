@@ -42,6 +42,7 @@ public class ModelGenerator
   private readonly CodeFormattingOptions _formatting;
   private readonly GeneratorConfiguration _config;
   private readonly HashSet<string> _generatedModels;
+  private readonly HashSet<string> _generatedEnums;
   private OpenApiDocument? _currentDocument;
 
   public ModelGenerator(GeneratorOptions options, CodeFormattingOptions? formatting = null)
@@ -57,6 +58,7 @@ public class ModelGenerator
     };
     _typeMapper = new TypeMapper(_config.TypeNameOverrides);
     _generatedModels = new HashSet<string>();
+    _generatedEnums = new HashSet<string>();
   }
 
   public ModelGenerator(GeneratorOptions options, GeneratorConfiguration config)
@@ -66,6 +68,7 @@ public class ModelGenerator
     _config = config;
     _typeMapper = new TypeMapper(config.TypeNameOverrides);
     _generatedModels = new HashSet<string>();
+    _generatedEnums = new HashSet<string>();
   }
 
   public async Task<Dictionary<string, ModelGenerationDecision>?> GenerateModelsAsync(OpenApiDocument document)
@@ -536,23 +539,16 @@ public class ModelGenerator
 
     // Use 'required' keyword only for Request models with required reference types
     // For Response models (likely deserialized), use = null!; to suppress CS8618
-    // Note: isRequestModel is already defined above (line 503) for JsonIgnore attribute
-    // Detect enums by convention (type names ending with "Enum")
-    bool isEnum = propertyType.EndsWith("Enum", StringComparison.Ordinal);
-
-    if (!isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?") && !isEnum)
+    if (!isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?"))
     {
-      // Response model: NO 'required' keyword, use = null!; initializer (but not for enums - they're value types)
       sb.AppendLine($"{indent}public {propertyType} {propertyNameClean} {{ get; set; }} = null!;");
     }
-    else if (isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?") && !isEnum)
+    else if (isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?"))
     {
-      // Request model: Use 'required' keyword (but not for enums - they're value types)
       sb.AppendLine($"{indent}public required {propertyType} {propertyNameClean} {{ get; set; }}");
     }
     else
     {
-      // Not required, or already nullable, or value type, or enum
       sb.AppendLine($"{indent}public {propertyType} {propertyNameClean} {{ get; set; }}");
     }
   }
@@ -935,6 +931,7 @@ public class ModelGenerator
     // Generate legacy/config-defined enums
     foreach (EnumConfig enumConfig in _config.Enums)
     {
+      _generatedEnums.Add(enumConfig.Name);
       await GenerateEnumAsync(enumConfig, outputDir);
     }
 
@@ -947,6 +944,8 @@ public class ModelGenerator
       {
         if (IsEnumSchema(kvp.Value))
         {
+          string enumClassName = _typeMapper.GetClassName(kvp.Key);
+          _generatedEnums.Add(enumClassName);
           await GenerateEnhancedEnumAsync(kvp.Key, kvp.Value, enhancedEnumGenerator, outputDir);
         }
       }
@@ -2001,6 +2000,15 @@ public static class EnumExtensions
     if (propertyType.Contains("[]") || propertyType.Contains("<"))
     {
       return false;
+    }
+
+    // Strip nullable suffix for comparison
+    string baseType = propertyType.TrimEnd('?');
+
+    // Enums are value types
+    if (_generatedEnums.Contains(baseType))
+    {
+      return true;
     }
 
     // Common value types
