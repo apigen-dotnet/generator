@@ -1734,7 +1734,7 @@ public class ClientGenerator
     string modelsProjectName = _options.ModelsNamespace.Split('.').Last() == "Models"
       ? _options.ModelsNamespace
       : _options.ModelsNamespace + ".Models";
-    sb.AppendLine($"    <ProjectReference Include=\"../{modelsProjectName}/{modelsProjectName}.csproj\" />");
+    sb.AppendLine($"    <ProjectReference Include=\"../{modelsProjectName}/{modelsProjectName}.csproj\" PrivateAssets=\"all\" />");
     sb.AppendLine("  </ItemGroup>");
     sb.AppendLine();
 
