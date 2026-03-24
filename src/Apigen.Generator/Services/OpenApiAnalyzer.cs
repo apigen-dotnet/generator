@@ -57,37 +57,48 @@ public class OpenApiAnalyzer
         };
 
         OpenApiSecurityScheme scheme = schemePair.Value;
-        auth.Type = scheme.Type.ToString().ToLowerInvariant();
 
         if (scheme.Type == SecuritySchemeType.ApiKey)
         {
-          auth.HeaderName = scheme.Name;
+          auth.Type = AuthSchemeType.ApiKey;
+          if (scheme.In == ParameterLocation.Cookie)
+          {
+            auth.In = AuthSchemeLocation.Cookie;
+            auth.CookieName = scheme.Name;
+          }
+          else
+          {
+            auth.In = AuthSchemeLocation.Header;
+            auth.HeaderName = scheme.Name;
+          }
         }
         else if (scheme.Type == SecuritySchemeType.Http)
         {
-          if (scheme.Scheme == "bearer")
+          auth.Type = AuthSchemeType.Http;
+          auth.In = AuthSchemeLocation.Header;
+          if (string.Equals(scheme.Scheme, "bearer", StringComparison.OrdinalIgnoreCase))
           {
             auth.HeaderName = "Authorization";
-            auth.Scheme = "Bearer";
+            auth.Scheme = HttpAuthScheme.Bearer;
           }
-          else if (scheme.Scheme == "basic")
+          else if (string.Equals(scheme.Scheme, "basic", StringComparison.OrdinalIgnoreCase))
           {
             auth.HeaderName = "Authorization";
-            auth.Scheme = "Basic";
+            auth.Scheme = HttpAuthScheme.Basic;
           }
+        }
+        else if (scheme.Type == SecuritySchemeType.OAuth2)
+        {
+          auth.Type = AuthSchemeType.OAuth2;
+          auth.In = AuthSchemeLocation.Header;
+          auth.HeaderName = "Authorization";
+          auth.Scheme = HttpAuthScheme.Bearer;
         }
 
         schemes.Add(auth);
       }
 
-      // Sort: prefer ApiKey/Bearer, then Basic, then others
-      schemes = schemes.OrderByDescending(s =>
-      {
-        if (s.Type == "apikey") return 3;
-        if (s.Scheme == "Bearer") return 2;
-        if (s.Scheme == "Basic") return 1;
-        return 0;
-      }).ToList();
+      // Keep spec order — no reason to re-sort
     }
 
     return schemes;
@@ -104,36 +115,41 @@ public class OpenApiAnalyzer
         .FirstOrDefault(s => s.Value.Type == SecuritySchemeType.ApiKey);
 
       KeyValuePair<string, OpenApiSecurityScheme>? httpScheme = document.Components.SecuritySchemes
-        .FirstOrDefault(s => s.Value.Type == SecuritySchemeType.Http && s.Value.Scheme == "bearer");
+        .FirstOrDefault(s => s.Value.Type == SecuritySchemeType.Http && string.Equals(s.Value.Scheme, "bearer", StringComparison.OrdinalIgnoreCase));
 
       // Prefer ApiKey schemes
       if (apiKeyScheme != null && apiKeyScheme.Value.Value != null)
       {
         OpenApiSecurityScheme scheme = apiKeyScheme.Value.Value;
-        auth.Type = scheme.Type.ToString().ToLowerInvariant();
+        auth.Type = AuthSchemeType.ApiKey;
+        auth.In = AuthSchemeLocation.Header;
         auth.HeaderName = scheme.Name;
       }
       // Fall back to HTTP Bearer
       else if (httpScheme != null && httpScheme.Value.Value != null)
       {
-        auth.Type = "http";
+        auth.Type = AuthSchemeType.Http;
+        auth.In = AuthSchemeLocation.Header;
         auth.HeaderName = "Authorization";
-        auth.Scheme = "Bearer";
+        auth.Scheme = HttpAuthScheme.Bearer;
       }
       // Fall back to first scheme
       else
       {
         OpenApiSecurityScheme scheme = document.Components.SecuritySchemes.First().Value;
-        auth.Type = scheme.Type.ToString().ToLowerInvariant();
 
         if (scheme.Type == SecuritySchemeType.ApiKey)
         {
+          auth.Type = AuthSchemeType.ApiKey;
+          auth.In = AuthSchemeLocation.Header;
           auth.HeaderName = scheme.Name;
         }
-        else if (scheme.Type == SecuritySchemeType.Http && scheme.Scheme == "bearer")
+        else if (scheme.Type == SecuritySchemeType.Http && string.Equals(scheme.Scheme, "bearer", StringComparison.OrdinalIgnoreCase))
         {
+          auth.Type = AuthSchemeType.Http;
+          auth.In = AuthSchemeLocation.Header;
           auth.HeaderName = "Authorization";
-          auth.Scheme = "Bearer";
+          auth.Scheme = HttpAuthScheme.Bearer;
         }
       }
     }

@@ -216,27 +216,55 @@ public class ClientGenerator
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 
-    // Constructor 2: Simple constructor for basic usage
-    // Generate constructors for each authentication scheme
-    HashSet<string> generatedConstructorSignatures = new();
+    // Private constructor for factory methods (takes ownership of HttpClient)
+    sb.AppendLine($"{indent}private {_options.ClientClassName}(HttpClient httpClient, bool disposeHttpClient{(_options.UseILogger ? ", ILogger? logger" : "")})");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}_httpClient = httpClient;");
+    sb.AppendLine($"{indent}{indent}_disposeHttpClient = disposeHttpClient;");
+    if (_options.UseILogger)
+    {
+      sb.AppendLine($"{indent}{indent}_logger = logger;");
+    }
+    sb.AppendLine();
+    foreach (ResourceOperation resource in uniqueResources)
+    {
+      string clientName = GetResourceClientName(resource.Name);
+      string propertyName = SanitizeOperationId(resource.Name).ToPascalCase();
+      if (_options.UseILogger)
+      {
+        sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
+      }
+      else
+      {
+        sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient);");
+      }
+    }
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
+
+    // Static factory methods for each authentication scheme
+    HashSet<string> generatedFactories = new();
     foreach (AuthenticationScheme authScheme in analysis.AuthenticationSchemes)
     {
-      // Generate a signature key to detect duplicates
-      string signatureKey = authScheme.Scheme == "Basic"
-        ? "Basic_username_password_baseUrl"
-        : "Token_apiToken_baseUrl";
+      string factoryKey = authScheme.Scheme == HttpAuthScheme.Basic
+        ? "basic"
+        : authScheme.In == AuthSchemeLocation.Cookie
+          ? "cookie"
+          : authScheme.Scheme == HttpAuthScheme.Bearer
+            ? "bearer"
+            : $"apikey_{authScheme.HeaderName}";
 
-      if (!generatedConstructorSignatures.Contains(signatureKey))
+      if (!generatedFactories.Contains(factoryKey))
       {
-        generatedConstructorSignatures.Add(signatureKey);
-        GenerateAuthConstructor(sb, indent, analysis, authScheme, uniqueResources);
+        generatedFactories.Add(factoryKey);
+        GenerateAuthFactory(sb, indent, analysis, authScheme, uniqueResources);
       }
     }
 
-    // If no auth schemes, generate a default token-based constructor
+    // If no auth schemes, generate a default token-based factory
     if (!analysis.AuthenticationSchemes.Any())
     {
-      GenerateAuthConstructor(sb, indent, analysis, analysis.Authentication, uniqueResources);
+      GenerateAuthFactory(sb, indent, analysis, analysis.Authentication, uniqueResources);
     }
 
     // Token-based authentication HttpClient factory
@@ -274,6 +302,25 @@ public class ClientGenerator
     sb.AppendLine();
     sb.AppendLine($"{indent}{indent}string credentials = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($\"{{username}}:{{password}}\"));");
     sb.AppendLine($"{indent}{indent}client.DefaultRequestHeaders.Add(\"Authorization\", $\"Basic {{credentials}}\");");
+    sb.AppendLine();
+
+    foreach (string header in _options.Authentication.RequiredHeaders)
+    {
+      sb.AppendLine($"{indent}{indent}client.DefaultRequestHeaders.Add(\"{header}\", \"XMLHttpRequest\");");
+    }
+
+    sb.AppendLine($"{indent}{indent}return client;");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
+
+    // Cookie-based authentication HttpClient factory
+    sb.AppendLine($"{indent}private static HttpClient CreateCookieAuthHttpClient(string token, string cookieName, string baseUrl)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}string normalizedBaseUrl = baseUrl.EndsWith(\"/\") ? baseUrl : baseUrl + \"/\";");
+    sb.AppendLine($"{indent}{indent}System.Net.CookieContainer cookies = new();");
+    sb.AppendLine($"{indent}{indent}cookies.Add(new Uri(normalizedBaseUrl), new System.Net.Cookie(cookieName, token));");
+    sb.AppendLine($"{indent}{indent}HttpClientHandler handler = new() {{ CookieContainer = cookies }};");
+    sb.AppendLine($"{indent}{indent}HttpClient client = new(handler) {{ BaseAddress = new Uri(normalizedBaseUrl) }};");
     sb.AppendLine();
 
     foreach (string header in _options.Authentication.RequiredHeaders)
@@ -1689,93 +1736,61 @@ public class ClientGenerator
   }
 
   // Helper methods
-  private void GenerateAuthConstructor(
+  private void GenerateAuthFactory(
     StringBuilder sb,
     string indent,
     OpenApiAnalysis analysis,
     AuthenticationScheme authScheme,
     List<ResourceOperation> uniqueResources)
   {
-    sb.AppendLine($"{indent}/// <summary>");
+    string loggerParam = _options.UseILogger ? ", ILogger? logger = null" : "";
+    string loggerArg = _options.UseILogger ? ", logger" : "";
 
-    if (authScheme.Scheme == "Basic")
+    if (authScheme.Scheme == HttpAuthScheme.Basic)
     {
-      sb.AppendLine($"{indent}/// Initialize client with Basic Authentication");
+      sb.AppendLine($"{indent}/// <summary>");
+      sb.AppendLine($"{indent}/// Create client with Basic Authentication");
       sb.AppendLine($"{indent}/// </summary>");
-      sb.AppendLine($"{indent}/// <param name=\"username\">Username for authentication</param>");
-      sb.AppendLine($"{indent}/// <param name=\"password\">Password for authentication</param>");
-      sb.AppendLine($"{indent}/// <param name=\"baseUrl\">Base URL for the API</param>");
-
-      if (_options.UseILogger)
-      {
-        sb.AppendLine($"{indent}/// <param name=\"logger\">Optional logger for request/response logging</param>");
-        sb.AppendLine(
-          $"{indent}public {_options.ClientClassName}(string username, string password, string baseUrl = \"{analysis.BaseUrl}\", ILogger? logger = null)");
-      }
-      else
-      {
-        sb.AppendLine(
-          $"{indent}public {_options.ClientClassName}(string username, string password, string baseUrl = \"{analysis.BaseUrl}\")");
-      }
-
+      sb.AppendLine($"{indent}public static {_options.ClientClassName} WithBasicAuth(string username, string password, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
       sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}{indent}_httpClient = CreateBasicAuthHttpClient(username, password, baseUrl);");
+      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateBasicAuthHttpClient(username, password, baseUrl);");
+      sb.AppendLine($"{indent}{indent}return new {_options.ClientClassName}(httpClient, true{loggerArg});");
+      sb.AppendLine($"{indent}}}");
+    }
+    else if (authScheme.In == AuthSchemeLocation.Cookie)
+    {
+      sb.AppendLine($"{indent}/// <summary>");
+      sb.AppendLine($"{indent}/// Create client with cookie-based authentication");
+      sb.AppendLine($"{indent}/// </summary>");
+      sb.AppendLine($"{indent}public static {_options.ClientClassName} WithCookie(string sessionToken, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateCookieAuthHttpClient(sessionToken, \"{authScheme.CookieName}\", baseUrl);");
+      sb.AppendLine($"{indent}{indent}return new {_options.ClientClassName}(httpClient, true{loggerArg});");
+      sb.AppendLine($"{indent}}}");
+    }
+    else if (authScheme.Scheme == HttpAuthScheme.Bearer)
+    {
+      sb.AppendLine($"{indent}/// <summary>");
+      sb.AppendLine($"{indent}/// Create client with Bearer token authentication");
+      sb.AppendLine($"{indent}/// </summary>");
+      sb.AppendLine($"{indent}public static {_options.ClientClassName} WithBearer(string bearerToken, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateTokenAuthHttpClient(bearerToken, baseUrl, \"Authorization\", true);");
+      sb.AppendLine($"{indent}{indent}return new {_options.ClientClassName}(httpClient, true{loggerArg});");
+      sb.AppendLine($"{indent}}}");
     }
     else
     {
-      // Token-based auth (ApiKey, Bearer, etc.)
-      string authDescription = authScheme.Type == "apikey" ? "API token" :
-                               authScheme.Scheme == "Bearer" ? "JWT bearer token" :
-                               "authentication token";
-
-      sb.AppendLine($"{indent}/// Initialize client with {authScheme.Name} authentication");
+      sb.AppendLine($"{indent}/// <summary>");
+      sb.AppendLine($"{indent}/// Create client with API key authentication");
       sb.AppendLine($"{indent}/// </summary>");
-      sb.AppendLine($"{indent}/// <param name=\"apiToken\">{authDescription}</param>");
-      sb.AppendLine($"{indent}/// <param name=\"baseUrl\">Base URL for the API</param>");
-
-      if (_options.UseILogger)
-      {
-        sb.AppendLine($"{indent}/// <param name=\"logger\">Optional logger for request/response logging</param>");
-        sb.AppendLine(
-          $"{indent}public {_options.ClientClassName}(string apiToken, string baseUrl = \"{analysis.BaseUrl}\", ILogger? logger = null)");
-      }
-      else
-      {
-        sb.AppendLine(
-          $"{indent}public {_options.ClientClassName}(string apiToken, string baseUrl = \"{analysis.BaseUrl}\")");
-      }
-
+      sb.AppendLine($"{indent}public static {_options.ClientClassName} WithApiKey(string apiKey, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
       sb.AppendLine($"{indent}{{");
-
-      // Use Bearer prefix if scheme is Bearer OR if it's Authorization header (common for JWT)
-      bool useBearer = authScheme.Scheme == "Bearer" || authScheme.HeaderName == "Authorization";
-      sb.AppendLine($"{indent}{indent}_httpClient = CreateTokenAuthHttpClient(apiToken, baseUrl, \"{authScheme.HeaderName}\", {(useBearer ? "true" : "false")});");
+      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateTokenAuthHttpClient(apiKey, baseUrl, \"{authScheme.HeaderName}\", false);");
+      sb.AppendLine($"{indent}{indent}return new {_options.ClientClassName}(httpClient, true{loggerArg});");
+      sb.AppendLine($"{indent}}}");
     }
 
-    sb.AppendLine($"{indent}{indent}_disposeHttpClient = true;");
-    if (_options.UseILogger)
-    {
-      sb.AppendLine($"{indent}{indent}_logger = logger;");
-    }
-
-    sb.AppendLine();
-
-    // Initialize resource clients
-    foreach (ResourceOperation resource in uniqueResources)
-    {
-      string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToPascalCase();
-      if (_options.UseILogger)
-      {
-        sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
-      }
-      else
-      {
-        sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient);");
-      }
-    }
-
-    sb.AppendLine($"{indent}}}");
     sb.AppendLine();
   }
 

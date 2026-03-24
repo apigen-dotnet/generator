@@ -10,7 +10,7 @@ public class HeaderOptions
   /// <summary>
   /// Whether to include the generation timestamp in the header
   /// </summary>
-  public bool IncludeTimestamp { get; set; } = true;
+  public bool IncludeTimestamp { get; set; } = false;
 
   /// <summary>
   /// Whether to include the source OpenAPI spec path in the header

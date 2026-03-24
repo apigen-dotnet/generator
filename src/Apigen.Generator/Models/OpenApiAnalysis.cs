@@ -36,15 +36,37 @@ public class OpenApiAnalysis
   public ParameterPattern ParameterPattern { get; set; } = new();
 }
 
+public enum AuthSchemeType
+{
+  ApiKey,
+  Http,
+  OAuth2
+}
+
+public enum AuthSchemeLocation
+{
+  Header,
+  Cookie,
+  Query
+}
+
+public enum HttpAuthScheme
+{
+  Bearer,
+  Basic
+}
+
 /// <summary>
 /// Authentication scheme detected from OpenAPI security schemes
 /// </summary>
 public class AuthenticationScheme
 {
-  public string Name { get; set; } = string.Empty; // Scheme name from spec (e.g., "JWTKeyAuth", "BasicAuth")
-  public string Type { get; set; } = "apiKey"; // apiKey, http, basic, oauth2
+  public string Name { get; set; } = string.Empty;
+  public AuthSchemeType Type { get; set; } = AuthSchemeType.ApiKey;
+  public AuthSchemeLocation In { get; set; } = AuthSchemeLocation.Header;
   public string? HeaderName { get; set; }
-  public string? Scheme { get; set; } // for http scheme (bearer, basic, etc.)
+  public string? CookieName { get; set; }
+  public HttpAuthScheme? Scheme { get; set; }
   public List<string> RequiredHeaders { get; set; } = new();
 }
 
