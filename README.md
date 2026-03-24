@@ -58,6 +58,7 @@ generate_client = true
 | Keycloak Admin | [`Apigen.Keycloak.Admin.Client`](https://github.com/apigen-dotnet/keycloak) |
 | Paperless-ngx | [`Apigen.PaperlessNgx.Client`](https://github.com/apigen-dotnet/paperless-ngx) |
 | Vikunja | [`Apigen.Vikunja.Client`](https://github.com/apigen-dotnet/vikunja) |
+| Immich | [`Apigen.Immich.Client`](https://github.com/apigen-dotnet/immich) |
 
 ## License
 

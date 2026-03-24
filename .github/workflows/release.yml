@@ -63,3 +63,10 @@ jobs:
           repository: apigen-dotnet/vikunja
           event-type: generator-release
           client-payload: '{"version": "${{ github.ref_name }}"}'
+
+      - uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ secrets.DISPATCH_TOKEN }}
+          repository: apigen-dotnet/immich
+          event-type: generator-release
+          client-payload: '{"version": "${{ github.ref_name }}"}'
