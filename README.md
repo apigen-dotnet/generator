@@ -46,9 +46,41 @@ generate_client = true
 - Property overrides with regex matching to fix API spec inaccuracies
 - Custom JSON converters (inline or file-based) for handling API quirks
 - Smart enum generation with string serialization
+- Binary response support (`Stream`) for file downloads, thumbnails, etc.
+- Multipart form-data upload support for file upload endpoints
+- Multiple authentication methods (API key, Bearer, Cookie, Basic) via static factory methods
 - Request/Response model splitting with deduplication
 - Type name overrides for conflict resolution
 - Configurable code formatting and naming conventions
+- ILogger integration for request/response logging
+
+## Advanced: Per-request authentication
+
+The generated clients bind authentication to the client instance. For scenarios where you need different auth per request (e.g., a proxy serving multiple users), use a `DelegatingHandler`:
+
+```csharp
+public class PerRequestAuthHandler : DelegatingHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        // Your logic to determine the API key for the current request
+        string apiKey = GetApiKeyForCurrentUser();
+        request.Headers.Add("x-api-key", apiKey);
+        return base.SendAsync(request, cancellationToken);
+    }
+}
+
+// Setup
+var handler = new PerRequestAuthHandler { InnerHandler = new HttpClientHandler() };
+var httpClient = new HttpClient(handler)
+{
+    BaseAddress = new Uri("https://your-api-instance/api")
+};
+var client = new ImmichApiClient(httpClient);
+```
+
+This works with any generated client — pass a pre-configured `HttpClient` to the constructor.
 
 ## Generated Client Libraries
 
