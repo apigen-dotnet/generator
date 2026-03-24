@@ -58,7 +58,7 @@ public class ClientGenerationOptions
   /// <summary>
   /// Whether to use ILogger for request/response logging (optional)
   /// </summary>
-  public bool UseILogger { get; set; } = false;
+  public bool UseILogger { get; set; } = true;
 
   /// <summary>
   /// Request class organization configuration

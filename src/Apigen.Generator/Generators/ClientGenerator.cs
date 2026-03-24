@@ -952,42 +952,48 @@ public class ClientGenerator
     // Handle void responses (204 No Content or empty body)
     if (operation.ResponseType == "void")
     {
-      sb.AppendLine($"{indent}try");
-      sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
-      sb.AppendLine($"{indent}}}");
-      sb.AppendLine($"{indent}catch (HttpRequestException ex)");
-      sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}  string responseContent = await response.Content.ReadAsStringAsync();");
       if (_options.UseILogger)
       {
+        sb.AppendLine($"{indent}try");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
+        sb.AppendLine($"{indent}}}");
+        sb.AppendLine($"{indent}catch (HttpRequestException ex)");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}  string responseContent = await response.Content.ReadAsStringAsync();");
         sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
+        sb.AppendLine($"{indent}  throw;");
+        sb.AppendLine($"{indent}}}");
       }
-
-      sb.AppendLine($"{indent}  throw;");
-      sb.AppendLine($"{indent}}}");
+      else
+      {
+        sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
+      }
 
       return sb.ToString();
     }
 
     // For all other responses, read the content
     sb.AppendLine($"{indent}string responseContent;");
-    sb.AppendLine($"{indent}try");
-    sb.AppendLine($"{indent}{{");
-    sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
-    sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
-    sb.AppendLine($"{indent}}}");
-    sb.AppendLine($"{indent}catch (HttpRequestException ex)");
-    sb.AppendLine($"{indent}{{");
-    sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
     if (_options.UseILogger)
     {
+      sb.AppendLine($"{indent}try");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
+      sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
+      sb.AppendLine($"{indent}}}");
+      sb.AppendLine($"{indent}catch (HttpRequestException ex)");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
       sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
+      sb.AppendLine($"{indent}  throw;");
+      sb.AppendLine($"{indent}}}");
     }
-
-    sb.AppendLine($"{indent}  throw;");
-    sb.AppendLine($"{indent}}}");
-    sb.AppendLine();
+    else
+    {
+      sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
+      sb.AppendLine($"{indent}responseContent = await response.Content.ReadAsStringAsync();");
+    }    sb.AppendLine();
 
     if (_options.UseILogger)
     {
