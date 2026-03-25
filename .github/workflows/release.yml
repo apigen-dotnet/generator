@@ -39,10 +39,13 @@ jobs:
           artifacts: ./nupkg/*.nupkg
 
       - name: Notify client repos
-        if: ${{ secrets.DISPATCH_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "DISPATCH_TOKEN not set, skipping client notifications"
+            exit 0
+          fi
           for repo in invoiceninja keycloak paperless-ngx vikunja immich; do
             echo "Notifying apigen-dotnet/$repo..."
             gh api repos/apigen-dotnet/$repo/dispatches \
