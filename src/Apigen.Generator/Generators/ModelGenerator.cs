@@ -2322,22 +2322,47 @@ public static class EnumExtensions
       sb.AppendLine($"    return new {requestModelName}");
       sb.AppendLine("    {");
 
-      // Map properties (excluding readOnly and writeOnly ones)
-      // Extension converts Response → Request, so:
-      // - Exclude readOnly (only in Response, not in Request)
-      // - Exclude writeOnly (only in Request, not in Response)
+      // Map properties that exist on BOTH the response and request models.
+      // The request model may come from:
+      //   a) A separate schema in the spec (e.g., PaymentRequest)
+      //   b) A generated variant that filters out readOnly properties
+      // We must only map properties that the request model actually has.
       OpenApiComponents? components = document?.Components;
       if (components?.Schemas is { } schemas &&
           schemas.TryGetValue(decision.SchemaName, out OpenApiSchema? schema))
       {
         if (schema.Properties != null)
         {
+          // Determine which properties the request model has, with their schemas
+          Dictionary<string, OpenApiSchema> requestProperties = new(StringComparer.OrdinalIgnoreCase);
+
+          // Check if there's a separate request schema in the spec
+          string requestSchemaName = $"{decision.SchemaName}Request";
+          if (schemas.TryGetValue(requestSchemaName, out OpenApiSchema? requestSchema) &&
+              requestSchema.Properties != null)
+          {
+            foreach (KeyValuePair<string, OpenApiSchema> kvp in requestSchema.Properties)
+              requestProperties[kvp.Key] = kvp.Value;
+          }
+
+          // If no separate request schema, use the response schema minus readOnly/writeOnly
+          if (requestProperties.Count == 0)
+          {
+            foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
+            {
+              if (!property.Value.ReadOnly && !property.Value.WriteOnly)
+                requestProperties[property.Key] = property.Value;
+            }
+          }
+
           List<string> propertyMappings = new();
 
           foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
           {
-            // Include only if it's neither readOnly nor writeOnly (exists in both models)
-            if (!property.Value.ReadOnly && !property.Value.WriteOnly)
+            // Only map properties that exist on both models and have compatible types
+            if (requestProperties.TryGetValue(property.Key, out OpenApiSchema? requestProp) &&
+                !property.Value.WriteOnly &&
+                AreTypesCompatible(property.Value, requestProp))
             {
               string propName = property.Key.ToPascalCase();
               propertyMappings.Add($"      {propName} = source.{propName}");
@@ -2357,5 +2382,29 @@ public static class EnumExtensions
 
     string fileName = Path.Combine(outputDir, "ModelConversionExtensions.cs");
     await File.WriteAllTextAsync(fileName, sb.ToString());
+  }
+
+  /// <summary>
+  /// Checks whether two OpenAPI property schemas map to compatible C# types.
+  /// Properties with different type/format combinations would generate incompatible
+  /// C# types (e.g., string vs DateOnly) and must be skipped in conversions.
+  /// </summary>
+  private static bool AreTypesCompatible(OpenApiSchema source, OpenApiSchema target)
+  {
+    string sourceType = source.Type ?? "";
+    string targetType = target.Type ?? "";
+    string sourceFormat = source.Format ?? "";
+    string targetFormat = target.Format ?? "";
+
+    // Different base types are incompatible (e.g., object vs array, number vs string)
+    if (sourceType != targetType)
+      return false;
+
+    // Same type but different format means different C# types
+    // e.g., string vs string+date, number vs number+float
+    if (sourceFormat != targetFormat)
+      return false;
+
+    return true;
   }
 }
