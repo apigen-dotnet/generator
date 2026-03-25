@@ -2367,11 +2367,18 @@ public static class EnumExtensions
               string sourceType = ResolvePropertyType(property.Key, property.Value, false, decision.SchemaName);
               string targetType = ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
 
-              // Compare base types ignoring nullability (T is assignable to T?)
+              // Check type compatibility for assignment: target = source
+              // Exact match always works.
+              // T -> T? works (implicit conversion).
+              // T? -> T does NOT work (would need .Value).
               string sourceBase = sourceType.TrimEnd('?');
               string targetBase = targetType.TrimEnd('?');
+              bool baseTypesMatch = sourceBase == targetBase;
+              bool sourceIsNullable = sourceType.EndsWith("?");
+              bool targetIsNullable = targetType.EndsWith("?");
+              bool isAssignable = baseTypesMatch && (sourceType == targetType || (!sourceIsNullable && targetIsNullable));
 
-              if (sourceBase == targetBase)
+              if (isAssignable)
               {
                 string propName = property.Key.ToPascalCase();
                 propertyMappings.Add($"      {propName} = source.{propName}");
