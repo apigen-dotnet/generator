@@ -33,43 +33,19 @@ jobs:
         run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: ncipollo/release-action@v1
         with:
-          generate_release_notes: false
-          files: ./nupkg/*.nupkg
+          generateReleaseNotes: false
+          artifacts: ./nupkg/*.nupkg
 
       - name: Notify client repos
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: apigen-dotnet/invoiceninja
-          event-type: generator-release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
-
-      - uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: apigen-dotnet/keycloak
-          event-type: generator-release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
-
-      - uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: apigen-dotnet/paperless-ngx
-          event-type: generator-release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
-
-      - uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: apigen-dotnet/vikunja
-          event-type: generator-release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
-
-      - uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.DISPATCH_TOKEN }}
-          repository: apigen-dotnet/immich
-          event-type: generator-release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
+        if: ${{ secrets.DISPATCH_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          for repo in invoiceninja keycloak paperless-ngx vikunja immich; do
+            echo "Notifying apigen-dotnet/$repo..."
+            gh api repos/apigen-dotnet/$repo/dispatches \
+              -f event_type=generator-release \
+              -f "client_payload[version]=${{ github.ref_name }}" || true
+          done
