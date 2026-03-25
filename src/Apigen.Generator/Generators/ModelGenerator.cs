@@ -2367,7 +2367,11 @@ public static class EnumExtensions
               string sourceType = ResolvePropertyType(property.Key, property.Value, false, decision.SchemaName);
               string targetType = ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
 
-              if (sourceType == targetType)
+              // Compare base types ignoring nullability (T is assignable to T?)
+              string sourceBase = sourceType.TrimEnd('?');
+              string targetBase = targetType.TrimEnd('?');
+
+              if (sourceBase == targetBase)
               {
                 string propName = property.Key.ToPascalCase();
                 propertyMappings.Add($"      {propName} = source.{propName}");
