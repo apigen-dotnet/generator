@@ -2359,13 +2359,19 @@ public static class EnumExtensions
 
           foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
           {
-            // Only map properties that exist on both models and have compatible types
+            // Only map properties that exist on both models and have compatible final C# types
             if (requestProperties.TryGetValue(property.Key, out OpenApiSchema? requestProp) &&
-                !property.Value.WriteOnly &&
-                AreTypesCompatible(property.Value, requestProp))
+                !property.Value.WriteOnly)
             {
-              string propName = property.Key.ToPascalCase();
-              propertyMappings.Add($"      {propName} = source.{propName}");
+              // Compare the final C# types (after property overrides) to ensure compatibility
+              string sourceType = ResolvePropertyType(property.Key, property.Value, false, decision.SchemaName);
+              string targetType = ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
+
+              if (sourceType == targetType)
+              {
+                string propName = property.Key.ToPascalCase();
+                propertyMappings.Add($"      {propName} = source.{propName}");
+              }
             }
           }
 
@@ -2385,26 +2391,20 @@ public static class EnumExtensions
   }
 
   /// <summary>
-  /// Checks whether two OpenAPI property schemas map to compatible C# types.
-  /// Properties with different type/format combinations would generate incompatible
-  /// C# types (e.g., string vs DateOnly) and must be skipped in conversions.
+  /// Resolves the final C# type for a property, taking into account property overrides from config.
   /// </summary>
-  private static bool AreTypesCompatible(OpenApiSchema source, OpenApiSchema target)
+  private string ResolvePropertyType(string propertyName, OpenApiSchema propertySchema, bool isRequired, string modelName)
   {
-    string sourceType = source.Type ?? "";
-    string targetType = target.Type ?? "";
-    string sourceFormat = source.Format ?? "";
-    string targetFormat = target.Format ?? "";
+    PropertyOverride? propertyOverride = _config.PropertyOverrides
+      .FirstOrDefault(o => o.Matches(propertyName, modelName, propertySchema.Type, propertySchema.Format));
 
-    // Different base types are incompatible (e.g., object vs array, number vs string)
-    if (sourceType != targetType)
-      return false;
+    string? enumName = propertyOverride?.Enum ?? propertyOverride?.EnumName;
 
-    // Same type but different format means different C# types
-    // e.g., string vs string+date, number vs number+float
-    if (sourceFormat != targetFormat)
-      return false;
+    if (!string.IsNullOrEmpty(enumName))
+    {
+      return enumName + (isRequired ? "" : "?");
+    }
 
-    return true;
+    return propertyOverride?.TargetType ?? GetPropertyType(propertySchema, isRequired, propertyName);
   }
 }
