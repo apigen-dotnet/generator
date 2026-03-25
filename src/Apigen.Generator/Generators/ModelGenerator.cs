@@ -744,7 +744,7 @@ public class ModelGenerator
 
     if (_options.GenerateNullableReferenceTypes && !isRequired && !baseType.EndsWith("?"))
     {
-      if (baseType == "string" || baseType.StartsWith("List<") || baseType.StartsWith("Dictionary<"))
+      if (baseType == "string" || baseType.EndsWith("[]") || baseType.StartsWith("List<") || baseType.StartsWith("Dictionary<"))
       {
         return baseType + "?";
       }

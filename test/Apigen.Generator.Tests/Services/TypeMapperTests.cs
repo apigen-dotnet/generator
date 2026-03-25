@@ -304,6 +304,28 @@ public class TypeMapperTests
     Assert.Equal(expected, result);
   }
 
+  [Theory]
+  [InlineData("files[invoice]", "FilesInvoice")]
+  [InlineData("files[client]", "FilesClient")]
+  [InlineData("data[name]", "DataName")]
+  [InlineData("items[0]", "Items0")]
+  public void GetPropertyName_BracketNotation_PreservesWordBoundaries(string input, string expected)
+  {
+    string result = _mapper.GetPropertyName(input);
+
+    Assert.Equal(expected, result);
+  }
+
+  [Theory]
+  [InlineData("func(arg)", "FuncArg")]
+  [InlineData("map{key}", "MapKey")]
+  public void GetPropertyName_ParenthesesAndBraces_PreservesWordBoundaries(string input, string expected)
+  {
+    string result = _mapper.GetPropertyName(input);
+
+    Assert.Equal(expected, result);
+  }
+
   #endregion
 
   #region GetClassName

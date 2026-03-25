@@ -130,12 +130,12 @@ public class TypeMapper
       .Replace("~", "Tilde")       // ~temp -> TildeTemp
       .Replace("`", "Backtick")    // `code` -> BacktickCode
       .Replace("^", "Caret")       // a^b -> aCaretb
-      .Replace("(", "")            // Remove parentheses
-      .Replace(")", "")
-      .Replace("{", "")            // Remove braces
-      .Replace("}", "")
-      .Replace("[", "")            // Remove square brackets
-      .Replace("]", "");           // Remove square brackets
+      .Replace("(", " ")            // Convert to space to preserve word boundaries
+      .Replace(")", " ")
+      .Replace("{", " ")            // Convert to space to preserve word boundaries
+      .Replace("}", " ")
+      .Replace("[", " ")            // Convert to space to preserve word boundaries
+      .Replace("]", " ");
       // Note: Underscore, hyphen, and space are handled by ToPascalCase
 
     // Use the existing ToPascalCase extension which handles:
