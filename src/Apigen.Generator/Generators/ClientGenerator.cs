@@ -3,7 +3,7 @@ using Apigen.Generator.Models;
 using Apigen.Generator.Services;
 using System.Globalization;
 using System.Text;
-using System.Text.Casing;
+using StringCasing;
 using System.Text.RegularExpressions;
 using System.Linq;
 
@@ -64,7 +64,7 @@ public class ClientGenerator
     result.MainClient = GenerateMainClient(analysis);
 
     // Generate resource clients (deduplicated by PascalCase name)
-    foreach (ResourceOperation resource in analysis.Resources.DistinctBy(r => r.Name.ToPascalCase()))
+    foreach (ResourceOperation resource in analysis.Resources.DistinctBy(r => r.Name.ToDotNetPascalCase()))
     {
       GeneratedFile resourceClient = GenerateResourceClient(resource, analysis);
       result.ResourceClients.Add(resourceClient);
@@ -121,7 +121,7 @@ public class ClientGenerator
   private GeneratedFile GenerateMainClient(OpenApiAnalysis analysis)
   {
     // Get unique resources to avoid duplicates from multiple tags mapping to same PascalCase name
-    List<ResourceOperation> uniqueResources = analysis.Resources.DistinctBy(r => r.Name.ToPascalCase()).ToList();
+    List<ResourceOperation> uniqueResources = analysis.Resources.DistinctBy(r => r.Name.ToDotNetPascalCase()).ToList();
     return GenerateMainClientInternal(uniqueResources, analysis);
   }
 
@@ -174,7 +174,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToPascalCase();
+      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
       sb.AppendLine($"{indent}/// <summary>");
       sb.AppendLine($"{indent}/// Client for {resource.Name} operations");
       sb.AppendLine($"{indent}/// </summary>");
@@ -212,7 +212,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToPascalCase();
+      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
       if (_options.UseILogger)
       {
         sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
@@ -239,7 +239,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToPascalCase();
+      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
       if (_options.UseILogger)
       {
         sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
@@ -535,7 +535,7 @@ public class ClientGenerator
         Models.OperationType.Update => "Update",
         Models.OperationType.Delete => "Delete",
         Models.OperationType.Bulk => "Bulk",
-        _ => operationId.ToPascalCase(),
+        _ => operationId.ToDotNetPascalCase(),
       };
 
       // If we still have conflicts, use path-based naming as fallback
@@ -573,7 +573,7 @@ public class ClientGenerator
       if (normalizedMethod == expectedPattern)
       {
         // Return just the prefix with original casing
-        return prefix.ToPascalCase();
+        return prefix.ToDotNetPascalCase();
       }
     }
 
@@ -603,7 +603,7 @@ public class ClientGenerator
     }
 
     // Build operation ID: method + joined segments
-    string resourcePart = string.Join("", meaningfulSegments.Select(s => s.ToPascalCase()));
+    string resourcePart = string.Join("", meaningfulSegments.Select(s => s.ToDotNetPascalCase()));
     return method + resourcePart;
   }
 
@@ -658,11 +658,11 @@ public class ClientGenerator
 
     // Normalize HTTP method: "GET" -> "Get", "POST" -> "Post", etc.
     // Use existing ToPascalCase extension after lowercasing
-    string methodName = operation.Method.ToLowerInvariant().ToPascalCase();
+    string methodName = operation.Method.ToLowerInvariant().ToDotNetPascalCase();
 
     // Build method name from path segments with proper normalization
     // Apply the same normalization as we do for operationIds
-    string pathName = string.Concat(pathSegments.Select(s => SanitizeOperationId(s).ToPascalCase()));
+    string pathName = string.Concat(pathSegments.Select(s => SanitizeOperationId(s).ToDotNetPascalCase()));
     return $"{methodName}{pathName}";
   }
 
@@ -712,13 +712,13 @@ public class ClientGenerator
     // Add path parameters
     foreach (ApiParameter param in operation.Parameters.Where(p => p.Location == "path"))
     {
-      parameters.Add($"{param.Type} {param.Name.ToCamelCase()}");
+      parameters.Add($"{param.Type} {param.Name.ToDotNetCamelCase()}");
     }
 
     // Add request body parameter
     if (!string.IsNullOrEmpty(operation.RequestBodyType))
     {
-      string paramName = operation.RequestBodyType.ToCamelCase();
+      string paramName = operation.RequestBodyType.ToDotNetCamelCase();
       string fullyQualifiedType = operation.RequestBodyType;
 
       // Apply type name overrides from configuration
@@ -763,7 +763,7 @@ public class ClientGenerator
         operationId = overriddenOperationId;
       }
 
-      parameters.Add($"{operationId.ToPascalCase()}Request? request = null");
+      parameters.Add($"{operationId.ToDotNetPascalCase()}Request? request = null");
     }
 
     return string.Join(", ", parameters);
@@ -822,7 +822,7 @@ public class ClientGenerator
       {
         var param = pathParams[i];
         // Use exact template placeholder name as dictionary key (case-sensitive mapping)
-        sb.Append($"{indent}  [\"{param.Name}\"] = {param.Name.ToCamelCase()}");
+        sb.Append($"{indent}  [\"{param.Name}\"] = {param.Name.ToDotNetCamelCase()}");
         if (i < pathParams.Count - 1)
           sb.Append(",");
         sb.AppendLine();
@@ -882,7 +882,7 @@ public class ClientGenerator
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToCamelCase();
+          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -911,7 +911,7 @@ public class ClientGenerator
       case "PUT":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToCamelCase();
+          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -940,7 +940,7 @@ public class ClientGenerator
       case "PATCH":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToCamelCase();
+          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
           sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
           if (_options.UseILogger)
           {
@@ -1232,13 +1232,13 @@ public class ClientGenerator
       sb.AppendLine("{");
       string dataPropertyName = analysis.ResponsePattern.DataProperty ?? "data";
       sb.AppendLine($"  [JsonPropertyName(\"{dataPropertyName}\")]");
-      sb.AppendLine($"  public T {dataPropertyName.ToPascalCase()} {{ get; set; }} = default!;");
+      sb.AppendLine($"  public T {dataPropertyName.ToDotNetPascalCase()} {{ get; set; }} = default!;");
 
       if (!string.IsNullOrEmpty(analysis.ResponsePattern.MetaProperty))
       {
         sb.AppendLine($"  [JsonPropertyName(\"{analysis.ResponsePattern.MetaProperty}\")]");
         sb.AppendLine(
-          $"  public {_options.ModelsNamespace}.Meta? {analysis.ResponsePattern.MetaProperty.ToPascalCase()} {{ get; set; }}");
+          $"  public {_options.ModelsNamespace}.Meta? {analysis.ResponsePattern.MetaProperty.ToDotNetPascalCase()} {{ get; set; }}");
       }
 
       sb.AppendLine("}");
@@ -1296,7 +1296,7 @@ public class ClientGenerator
             operationId = overriddenOperationId;
           }
 
-          string className = $"{operationId.ToPascalCase()}Request";
+          string className = $"{operationId.ToDotNetPascalCase()}Request";
 
           if (generatedClasses.Add(className))
           {
@@ -1331,7 +1331,7 @@ public class ClientGenerator
 
     foreach (ResourceOperation resource in analysis.Resources)
     {
-      string resourceKey = resource.Name.ToPascalCase();
+      string resourceKey = resource.Name.ToDotNetPascalCase();
       if (!resourceGroups.ContainsKey(resourceKey))
       {
         resourceGroups[resourceKey] = new List<(ApiOperation, List<ApiParameter>)>();
@@ -1397,12 +1397,12 @@ public class ClientGenerator
     sb.AppendLine("{");
     string dataPropertyName = analysis.ResponsePattern.DataProperty ?? "data";
     sb.AppendLine($"  [JsonPropertyName(\"{dataPropertyName}\")]");
-    sb.AppendLine($"  public T {dataPropertyName.ToPascalCase()} {{ get; set; }} = default!;");
+    sb.AppendLine($"  public T {dataPropertyName.ToDotNetPascalCase()} {{ get; set; }} = default!;");
 
     if (!string.IsNullOrEmpty(analysis.ResponsePattern.MetaProperty))
     {
       sb.AppendLine($"  [JsonPropertyName(\"{analysis.ResponsePattern.MetaProperty}\")]");
-      sb.AppendLine($"  public {_options.ModelsNamespace}.Meta? {analysis.ResponsePattern.MetaProperty.ToPascalCase()} {{ get; set; }}");
+      sb.AppendLine($"  public {_options.ModelsNamespace}.Meta? {analysis.ResponsePattern.MetaProperty.ToDotNetPascalCase()} {{ get; set; }}");
     }
 
     sb.AppendLine("}");
@@ -1521,7 +1521,7 @@ public class ClientGenerator
         operationId = overriddenOperationId;
       }
 
-      string className = $"{operationId.ToPascalCase()}Request";
+      string className = $"{operationId.ToDotNetPascalCase()}Request";
 
       if (generatedClasses.Add(className))
       {
@@ -1556,7 +1556,7 @@ public class ClientGenerator
     // Generate properties
     foreach (ApiParameter param in queryParams)
     {
-      string propertyName = param.Name.ToPascalCase();
+      string propertyName = param.Name.ToDotNetPascalCase();
       string propertyType = param.Type;
 
       if (!propertyType.EndsWith("?"))
@@ -1596,7 +1596,7 @@ public class ClientGenerator
 
     foreach (ApiParameter param in queryParams)
     {
-      string propertyName = param.Name.ToPascalCase();
+      string propertyName = param.Name.ToDotNetPascalCase();
       sb.AppendLine($"    if ({propertyName} != null)");
       sb.AppendLine($"      queryParams[\"{param.Name}\"] = {propertyName};");
     }
@@ -1645,7 +1645,7 @@ public class ClientGenerator
             operationId = overriddenOperationId;
           }
 
-          string className = $"{operationId.ToPascalCase()}Request";
+          string className = $"{operationId.ToDotNetPascalCase()}Request";
 
           if (requestClasses.Add(className)) // Only add if not already added
           {
@@ -1659,7 +1659,7 @@ public class ClientGenerator
             // Generate actual properties for query parameters
             foreach (ApiParameter param in queryParams)
             {
-              string propertyName = param.Name.ToPascalCase();
+              string propertyName = param.Name.ToDotNetPascalCase();
               string propertyType = param.Type;
 
               // Make query parameters optional by default
@@ -1700,7 +1700,7 @@ public class ClientGenerator
 
             foreach (ApiParameter param in queryParams)
             {
-              string propertyName = param.Name.ToPascalCase();
+              string propertyName = param.Name.ToDotNetPascalCase();
               sb.AppendLine($"    if ({propertyName} != null)");
               sb.AppendLine($"      queryParams[\"{param.Name}\"] = {propertyName};");
             }
@@ -1856,7 +1856,7 @@ public class ClientGenerator
   private string GetResourceClientName(string resourceName)
   {
     string sanitizedName = SanitizeOperationId(resourceName);
-    string pascalName = sanitizedName.ToPascalCase();
+    string pascalName = sanitizedName.ToDotNetPascalCase();
 
     // Apply type name overrides to resource names (e.g., "Oauth" -> "OAuth")
     pascalName = ApplyTypeNameOverrides(pascalName);
@@ -1867,7 +1867,7 @@ public class ClientGenerator
   private string GetResourceInterfaceName(string resourceName)
   {
     string sanitizedName = SanitizeOperationId(resourceName);
-    string pascalName = sanitizedName.ToPascalCase();
+    string pascalName = sanitizedName.ToDotNetPascalCase();
 
     // Apply type name overrides to resource names (e.g., "Oauth" -> "OAuth")
     pascalName = ApplyTypeNameOverrides(pascalName);

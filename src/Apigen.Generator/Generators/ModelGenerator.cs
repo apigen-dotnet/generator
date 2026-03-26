@@ -1,5 +1,5 @@
 using System.Text;
-using System.Text.Casing;
+using StringCasing;
 using System.Text.RegularExpressions;
 using Microsoft.OpenApi.Models;
 using Microsoft.OpenApi.Any;
@@ -910,7 +910,7 @@ public class ModelGenerator
             string? operationId = operation.Value.OperationId;
             if (!string.IsNullOrEmpty(operationId))
             {
-              string modelName = operationId.ToPascalCase() + "Request";
+              string modelName = operationId.ToDotNetPascalCase() + "Request";
 
               // Avoid duplicates
               if (!generatedRequestModels.Contains(modelName))
@@ -2173,7 +2173,7 @@ public static class EnumExtensions
     string modelName)
   {
     // Use existing GenerateProperty logic but respect variant type
-    string propertyNamePascal = propertyName.ToPascalCase();
+    string propertyNamePascal = propertyName.ToDotNetPascalCase();
 
     // Add XML documentation
     if (!string.IsNullOrEmpty(propertySchema.Description))
@@ -2380,7 +2380,7 @@ public static class EnumExtensions
 
               if (isAssignable)
               {
-                string propName = property.Key.ToPascalCase();
+                string propName = property.Key.ToDotNetPascalCase();
                 propertyMappings.Add($"      {propName} = source.{propName}");
               }
             }

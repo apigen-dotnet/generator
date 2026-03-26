@@ -1,5 +1,4 @@
-using System.Linq;
-using System.Text.Casing;
+using StringCasing;
 using Microsoft.OpenApi.Models;
 using Apigen.Generator.Models;
 
@@ -136,14 +135,15 @@ public class TypeMapper
       .Replace("}", " ")
       .Replace("[", " ")            // Convert to space to preserve word boundaries
       .Replace("]", " ");
-      // Note: Underscore, hyphen, and space are handled by ToPascalCase
+      // Note: Underscore, hyphen, and space are handled by ToDotNetPascalCase
 
-    // Use the existing ToPascalCase extension which handles:
-    // - snake_case (underscores)
+    // Use ToDotNetPascalCase which follows Microsoft naming conventions:
+    // - snake_case, SCREAMING_SNAKE_CASE (underscores)
     // - kebab-case (hyphens)
     // - spaces
     // - camelCase detection
-    return cleanName.ToPascalCase();
+    // - Two-letter acronyms stay uppercase (IO, DB), longer ones get title-cased (Http, Api)
+    return cleanName.ToDotNetPascalCase();
   }
 
   public string GetClassName(string name)
@@ -198,8 +198,8 @@ public class TypeMapper
       .Replace("-", " ");          // Convert hyphen to space for word boundaries
       // Note: Underscore is valid in C# identifiers, so we keep it
 
-    // Step 3: Use the existing ToPascalCase extension which handles all delimiters
-    string result = cleanName.ToPascalCase();
+    // Step 3: Use ToDotNetPascalCase which follows Microsoft naming conventions
+    string result = cleanName.ToDotNetPascalCase();
 
     // Step 4: Normalize common acronyms to proper casing
     result = NormalizeAcronyms(result);
@@ -252,7 +252,7 @@ public class TypeMapper
       // Two-letter acronyms
       { "ID", "Id" },
       { "UI", "Ui" },
-      { "IO", "Io" },
+      { "IO", "IO" },
       { "DB", "Db" },
       { "OS", "Os" },
 

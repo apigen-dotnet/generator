@@ -375,11 +375,11 @@ public class TypeMapperTests
   [Fact]
   public void GetClassName_HTTPSAcronym_NormalizedCorrectly()
   {
-    // "HTTPSRequest" → ToPascalCase keeps it unchanged → NormalizeAcronyms matches HTTP first → "HttpSRequest"
-    // HTTP is matched before HTTPS because it appears first in the dictionary iteration
+    // "HTTPSRequest" → ToDotNetPascalCase splits into HTTPS + Request → "HttpsRequest"
+    // NormalizeAcronyms then matches HTTPS → "Https" (5 letters, title-cased)
     string result = _mapper.GetClassName("HTTPSRequest");
 
-    Assert.Equal("HttpSRequest", result);
+    Assert.Equal("HttpsRequest", result);
   }
 
   [Fact]
