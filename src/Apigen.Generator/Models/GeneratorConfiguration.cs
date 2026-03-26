@@ -3,6 +3,9 @@ using Tomlyn;
 
 namespace Apigen.Generator.Models;
 
+// Tomlyn 2.x uses System.Text.Json-style property naming; snake_case policy matches TOML conventions
+// UseILogger needs explicit [JsonPropertyName] because SnakeCaseLower splits it as "use_i_logger" instead of "use_ilogger"
+
 public class GeneratorConfiguration
 {
   public string InputPath { get; set; } = string.Empty;
@@ -103,7 +106,11 @@ public class GeneratorConfiguration
 
       if (extension == ".toml")
       {
-        config = Toml.ToModel<GeneratorConfiguration>(content);
+        var tomlOptions = new TomlSerializerOptions
+        {
+          PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        };
+        config = TomlSerializer.Deserialize<GeneratorConfiguration>(content, tomlOptions);
       }
       else
       {
@@ -171,7 +178,11 @@ public class GeneratorConfiguration
 
     if (extension == ".toml")
     {
-      string toml = Toml.FromModel(this);
+      var tomlOptions = new TomlSerializerOptions
+      {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+      };
+      string toml = TomlSerializer.Serialize(this, tomlOptions);
       await File.WriteAllTextAsync(configPath, toml);
     }
     else

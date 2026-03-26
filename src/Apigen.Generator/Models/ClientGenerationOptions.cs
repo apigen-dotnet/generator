@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Apigen.Generator.Models;
 
 /// <summary>
@@ -58,6 +60,7 @@ public class ClientGenerationOptions
   /// <summary>
   /// Whether to use ILogger for request/response logging (optional)
   /// </summary>
+  [JsonPropertyName("use_ilogger")]
   public bool UseILogger { get; set; } = true;
 
   /// <summary>
