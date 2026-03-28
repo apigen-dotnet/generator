@@ -43,7 +43,10 @@ internal class Program
 
     if (positionalArgs.Count > 0)
     {
-      config.InputPath = positionalArgs[0];
+      config.Specs = new List<SpecConfiguration>
+      {
+        new() { Path = positionalArgs[0], PathPrefix = "" }
+      };
     }
 
     if (positionalArgs.Count > 1)
@@ -56,9 +59,9 @@ internal class Program
       config.Models.Namespace = positionalArgs[2];
     }
 
-    if (string.IsNullOrEmpty(config.InputPath))
+    if (config.Specs.Count == 0 || config.Specs.All(s => string.IsNullOrEmpty(s.Path)))
     {
-      Console.WriteLine("Error: No input path specified. Use --help for usage information.");
+      Console.WriteLine("Error: No specs specified. Use [[specs]] in your config file or provide a spec path argument.");
       Environment.Exit(1);
     }
 
@@ -66,12 +69,37 @@ internal class Program
 
     try
     {
-      Console.WriteLine($"Reading OpenAPI specification from: {options.InputPath}");
+      Console.WriteLine($"Reading OpenAPI specifications ({config.Specs.Count} spec(s))...");
       OpenApiSpecReader reader = new();
-      OpenApiDocument document = await reader.ReadSpecificationAsync(options.InputPath);
 
-      Console.WriteLine($"OpenAPI {document.Info.Version}: {document.Info.Title}");
-      Console.WriteLine($"Found {document.Components?.Schemas?.Count ?? 0} schemas");
+      List<OpenApiDocument> specDocuments = new();
+      foreach (var spec in config.Specs)
+      {
+        Console.WriteLine($"  Reading: {spec.Path}");
+        OpenApiDocument specDoc = await reader.ReadSpecificationAsync(spec.Path);
+
+        if (!string.IsNullOrEmpty(spec.PathPrefix))
+        {
+          Console.WriteLine($"    Applying path prefix: {spec.PathPrefix}");
+          OpenApiSpecReader.ApplyPathPrefix(specDoc, spec.PathPrefix);
+        }
+
+        specDocuments.Add(specDoc);
+      }
+
+      OpenApiDocument document;
+      if (specDocuments.Count == 1)
+      {
+        document = specDocuments[0];
+      }
+      else
+      {
+        Console.WriteLine($"  Merging {specDocuments.Count} specs...");
+        document = OpenApiSpecMerger.Merge(specDocuments);
+      }
+
+      Console.WriteLine($"OpenAPI: {document.Info.Title}");
+      Console.WriteLine($"Found {document.Paths?.Count ?? 0} paths, {document.Components?.Schemas?.Count ?? 0} schemas");
 
       // Generate models
       ModelGenerator modelGenerator = new(options, config);
@@ -141,7 +169,10 @@ internal class Program
   {
     GeneratorConfiguration config = new()
     {
-      InputPath = "api-docs.yaml",
+      Specs = new List<SpecConfiguration>
+      {
+        new() { Path = "api-docs.yaml", PathPrefix = "" }
+      },
       OutputPath = "Generated",
       GenerateNullableReferenceTypes = true,
       GenerateDataAnnotations = true,

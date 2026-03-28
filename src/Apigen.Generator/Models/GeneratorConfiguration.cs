@@ -8,7 +8,11 @@ namespace Apigen.Generator.Models;
 
 public class GeneratorConfiguration
 {
-  public string InputPath { get; set; } = string.Empty;
+  /// <summary>
+  /// OpenAPI spec inputs. Each entry has a path and optional path_prefix.
+  /// Replaces the old input_path single-spec field.
+  /// </summary>
+  public List<SpecConfiguration> Specs { get; set; } = new();
   public string OutputPath { get; set; } = "Generated";
   public string TargetFramework { get; set; } = "net8.0";
   public bool GenerateNullableReferenceTypes { get; set; } = true;
@@ -203,7 +207,7 @@ public class GeneratorConfiguration
   {
     return new GeneratorOptions
     {
-      InputPath = InputPath,
+      InputPath = Specs.FirstOrDefault()?.Path ?? string.Empty,
       OutputPath = OutputPath,
       Namespace = Models.Namespace,
       ProjectName = Models.ProjectName,
