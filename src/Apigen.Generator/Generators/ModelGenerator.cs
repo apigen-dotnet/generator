@@ -56,7 +56,7 @@ public class ModelGenerator
       JsonConverters = new List<JsonConverterConfig>(),
       GlobalUsings = new List<string>(),
     };
-    _typeMapper = new TypeMapper(_config.TypeNameOverrides);
+    _typeMapper = new TypeMapper(_config.TypeNameOverrides, _config.Naming.Overrides);
     _generatedModels = new HashSet<string>();
     _generatedEnums = new HashSet<string>();
   }
@@ -66,7 +66,7 @@ public class ModelGenerator
     _options = options;
     _formatting = config.Formatting;
     _config = config;
-    _typeMapper = new TypeMapper(config.TypeNameOverrides);
+    _typeMapper = new TypeMapper(config.TypeNameOverrides, config.Naming.Overrides);
     _generatedModels = new HashSet<string>();
     _generatedEnums = new HashSet<string>();
   }
@@ -123,6 +123,13 @@ public class ModelGenerator
     {
       foreach (KeyValuePair<string, OpenApiSchema> schema in document.Components.Schemas)
       {
+        // Skip schemas that are null-only enums (e.g. {"enum": [null]}) - they represent nullable markers, not real types
+        if (IsNullOnlySchema(schema.Value))
+        {
+          Console.WriteLine($"  Skipping null-only schema: {schema.Key}");
+          continue;
+        }
+
         await GenerateModelClassAsync(schema.Key, schema.Value, outputDir, decisions, variantGenerator);
       }
     }
@@ -938,7 +945,7 @@ public class ModelGenerator
     // Generate enhanced enums from OpenAPI schemas
     if (_currentDocument?.Components?.Schemas != null)
     {
-      EnhancedEnumGenerator enhancedEnumGenerator = new(_config.EnumGeneration);
+      EnhancedEnumGenerator enhancedEnumGenerator = new(_config.EnumGeneration, _config.Naming.Overrides);
 
       foreach (KeyValuePair<string, OpenApiSchema> kvp in _currentDocument.Components.Schemas)
       {
@@ -1048,11 +1055,32 @@ public class ModelGenerator
   }
 
   /// <summary>
+  /// Checks if a schema only contains null values and no real properties.
+  /// These are nullable markers (e.g. {"enum": [null]}) used in oneOf patterns,
+  /// not real types that should be generated.
+  /// </summary>
+  private static bool IsNullOnlySchema(OpenApiSchema schema)
+  {
+    if (schema.Enum == null || schema.Enum.Count == 0)
+      return false;
+
+    bool allNull = schema.Enum.All(e => e is Microsoft.OpenApi.Any.OpenApiNull);
+    bool noProperties = schema.Properties == null || schema.Properties.Count == 0;
+
+    return allNull && noProperties;
+  }
+
+  /// <summary>
   /// Checks if an OpenAPI schema represents an enum
   /// </summary>
   private bool IsEnumSchema(OpenApiSchema schema)
   {
-    return schema.Enum != null && schema.Enum.Any();
+    if (schema.Enum == null || !schema.Enum.Any())
+      return false;
+
+    // Skip enums that only contain null values (e.g. {"enum": [null]})
+    bool hasNonNullValues = schema.Enum.Any(e => e is not Microsoft.OpenApi.Any.OpenApiNull);
+    return hasNonNullValues;
   }
 
   /// <summary>

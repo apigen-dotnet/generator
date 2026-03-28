@@ -7,10 +7,32 @@ namespace Apigen.Generator.Services;
 public class TypeMapper
 {
   private readonly List<TypeNameOverride> _typeNameOverrides;
+  private readonly Dictionary<string, string> _namingOverrides;
 
-  public TypeMapper(List<TypeNameOverride>? typeNameOverrides = null)
+  public TypeMapper(List<TypeNameOverride>? typeNameOverrides = null, Dictionary<string, string>? namingOverrides = null)
   {
     _typeNameOverrides = typeNameOverrides ?? new List<TypeNameOverride>();
+    _namingOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    if (namingOverrides != null)
+    {
+      foreach (var kvp in namingOverrides)
+        _namingOverrides[kvp.Key] = kvp.Value;
+    }
+  }
+
+  /// <summary>
+  /// Resolve a name: if a naming override exists for the original spec name, return it directly.
+  /// Otherwise, apply ToDotNetPascalCase.
+  /// </summary>
+  public string ResolveName(string originalName)
+  {
+    if (string.IsNullOrEmpty(originalName))
+      return originalName;
+
+    if (_namingOverrides.TryGetValue(originalName, out string? overrideName))
+      return overrideName;
+
+    return originalName.ToDotNetPascalCase();
   }
 
   public string MapOpenApiTypeToClr(OpenApiSchema schema, bool useNullable = true)
@@ -137,6 +159,11 @@ public class TypeMapper
       .Replace("]", " ");
       // Note: Underscore, hyphen, and space are handled by ToDotNetPascalCase
 
+    // Check naming overrides BEFORE ToDotNetPascalCase
+    // The override key matches the original spec name (case-insensitive)
+    if (_namingOverrides.TryGetValue(name, out string? overrideName))
+      return overrideName;
+
     // Use ToDotNetPascalCase which follows Microsoft naming conventions:
     // - snake_case, SCREAMING_SNAKE_CASE (underscores)
     // - kebab-case (hyphens)
@@ -197,6 +224,10 @@ public class TypeMapper
       .Replace("^", "Caret")
       .Replace("-", " ");          // Convert hyphen to space for word boundaries
       // Note: Underscore is valid in C# identifiers, so we keep it
+
+    // Check naming overrides BEFORE ToDotNetPascalCase
+    if (_namingOverrides.TryGetValue(name, out string? classOverride))
+      return classOverride;
 
     // Step 3: Use ToDotNetPascalCase which follows Microsoft naming conventions
     string result = cleanName.ToDotNetPascalCase();

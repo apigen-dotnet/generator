@@ -265,7 +265,7 @@ public class TypeMapperTests
   {
     string result = _mapper.GetPropertyName("x5t#S256");
 
-    Assert.Equal("X5tHashS256", result);
+    Assert.Equal("X5THashS256", result);
   }
 
   [Theory]

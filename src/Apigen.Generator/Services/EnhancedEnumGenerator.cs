@@ -4,6 +4,7 @@ using Microsoft.OpenApi.Models;
 using Microsoft.OpenApi.Any;
 using Apigen.Generator.Models;
 using Microsoft.OpenApi.Interfaces;
+using StringCasing;
 
 namespace Apigen.Generator.Services;
 
@@ -13,6 +14,7 @@ namespace Apigen.Generator.Services;
 public class EnhancedEnumGenerator
 {
   private readonly EnumGenerationOptions _options;
+  private readonly Dictionary<string, string> _namingOverrides;
 
   private readonly HashSet<string> _knownAcronyms = new(StringComparer.OrdinalIgnoreCase)
   {
@@ -20,9 +22,15 @@ public class EnhancedEnumGenerator
     "USA", "UK", "EU", "USD", "EUR", "GBP", "SMS", "GPS", "IP", "TCP", "UDP",
   };
 
-  public EnhancedEnumGenerator(EnumGenerationOptions options)
+  public EnhancedEnumGenerator(EnumGenerationOptions options, Dictionary<string, string>? namingOverrides = null)
   {
     _options = options;
+    _namingOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    if (namingOverrides != null)
+    {
+      foreach (var kvp in namingOverrides)
+        _namingOverrides[kvp.Key] = kvp.Value;
+    }
   }
 
   /// <summary>
@@ -39,6 +47,10 @@ public class EnhancedEnumGenerator
 
     switch (enumInfo.Strategy)
     {
+      case EnumGenerationStrategy.UseVarNames:
+        GenerateFromXEnumVarNames(enumInfo, schema);
+        break;
+
       case EnumGenerationStrategy.UseDescriptions:
         GenerateFromXEnumDescriptions(enumInfo, schema);
         break;
@@ -75,6 +87,12 @@ public class EnhancedEnumGenerator
       return EnumGenerationStrategy.Fallback;
     }
 
+    // Check for x-enum-varnames (explicit names from spec generator, highest priority)
+    if (schema.Extensions.ContainsKey("x-enum-varnames"))
+    {
+      return EnumGenerationStrategy.UseVarNames;
+    }
+
     // Check if enum values are developer-friendly
     if (AreDeveloperFriendly(enumValues))
     {
@@ -100,6 +118,53 @@ public class EnhancedEnumGenerator
     }
 
     return EnumGenerationStrategy.Fallback;
+  }
+
+  /// <summary>
+  /// Generates enum members from x-enum-varnames extension (explicit names provided by spec)
+  /// </summary>
+  private void GenerateFromXEnumVarNames(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
+  {
+    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    if (enumValues == null) return;
+
+    List<string>? varNames = null;
+    if (schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt) &&
+        varNamesExt is OpenApiArray varNamesArray)
+    {
+      varNames = varNamesArray
+        .Select(v => v is OpenApiString s ? s.Value : "")
+        .ToList();
+    }
+
+    if (varNames == null || varNames.Count == 0) return;
+
+    for (int i = 0; i < enumValues.Count; i++)
+    {
+      string rawValue = ExtractEnumValueString(enumValues[i]);
+      string varName = i < varNames.Count ? varNames[i] : $"_{rawValue}";
+
+      // Check naming override BEFORE ToDotNetPascalCase
+      string enhancedName;
+      if (_namingOverrides.TryGetValue(varName, out string? overrideName))
+        enhancedName = overrideName;
+      else
+        enhancedName = varName.ToDotNetPascalCase();
+
+      // Ensure valid C# identifier
+      if (string.IsNullOrEmpty(enhancedName) || char.IsDigit(enhancedName[0]))
+      {
+        enhancedName = $"_{enhancedName}";
+      }
+
+      enumInfo.Members[enhancedName] = new EnumMemberInfo
+      {
+        RawValue = rawValue,
+        EnhancedName = enhancedName,
+        Description = null,
+        NumericValue = int.TryParse(rawValue, out int num) ? num : null,
+      };
+    }
   }
 
   /// <summary>
@@ -169,7 +234,13 @@ public class EnhancedEnumGenerator
     foreach (IOpenApiAny value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
-      string enhancedName = CleanIdentifierName(rawValue);
+
+      // Check naming override BEFORE ToDotNetPascalCase
+      string enhancedName;
+      if (_namingOverrides.TryGetValue(rawValue, out string? preserveOverride))
+        enhancedName = preserveOverride;
+      else
+        enhancedName = rawValue.ToDotNetPascalCase();
 
       enumInfo.Members[enhancedName] = new EnumMemberInfo
       {
@@ -227,8 +298,19 @@ public class EnhancedEnumGenerator
     foreach (IOpenApiAny value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
-      // Clean the raw value to ensure it's a valid C# identifier
-      string enhancedName = $"_{CleanIdentifierName(rawValue)}";
+      // Check naming override BEFORE ToDotNetPascalCase
+      string enhancedName;
+      if (_namingOverrides.TryGetValue(rawValue, out string? fallbackOverride))
+      {
+        enhancedName = fallbackOverride;
+      }
+      else
+      {
+        string pascal = rawValue.ToDotNetPascalCase();
+        enhancedName = string.IsNullOrEmpty(pascal) || char.IsDigit(pascal[0])
+          ? $"_{pascal}"
+          : pascal;
+      }
 
       enumInfo.Members[enhancedName] = new EnumMemberInfo
       {
@@ -245,9 +327,13 @@ public class EnhancedEnumGenerator
   /// </summary>
   private string GenerateEnhancedName(string description, string fallbackValue)
   {
+    // Check naming override BEFORE any transformation
+    if (_namingOverrides.TryGetValue(fallbackValue, out string? enhancedOverride))
+      return enhancedOverride;
+
     if (string.IsNullOrWhiteSpace(description))
     {
-      return CleanIdentifierName(fallbackValue);
+      return fallbackValue.ToDotNetPascalCase();
     }
 
     // Remove unwanted words
@@ -257,11 +343,8 @@ public class EnhancedEnumGenerator
       cleanDescription = Regex.Replace(cleanDescription, $@"\b{Regex.Escape(word)}\b", "", RegexOptions.IgnoreCase);
     }
 
-    // Convert to PascalCase identifier
-    string pascalCase = ToPascalCase(cleanDescription);
-
-    // Clean up the identifier
-    string cleaned = CleanIdentifierName(pascalCase);
+    // Convert to .NET PascalCase
+    string cleaned = cleanDescription.ToDotNetPascalCase();
 
     // Truncate if too long
     if (cleaned.Length > _options.NameGeneration.MaxLength)

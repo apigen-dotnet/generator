@@ -37,11 +37,11 @@ public class ClientGenerator
     SerializationOptions? serialization = null)
   {
     _typeNameOverrides = typeNameOverrides ?? new List<TypeNameOverride>();
-    _analyzer = new OpenApiAnalyzer(_typeNameOverrides);
-    _typeMapper = new TypeMapper(_typeNameOverrides);
+    _naming = naming ?? new NamingOptions();
+    _analyzer = new OpenApiAnalyzer(_typeNameOverrides, _naming.Overrides);
+    _typeMapper = new TypeMapper(_typeNameOverrides, _naming.Overrides);
     _options = options;
     _formatting = formatting;
-    _naming = naming ?? new NamingOptions();
     _serialization = serialization ?? new SerializationOptions();
     _operationOverrides = operationOverrides ?? new List<OperationOverride>();
     _targetFramework = targetFramework;
@@ -725,11 +725,13 @@ public class ClientGenerator
     // Add request body parameter
     if (!string.IsNullOrEmpty(operation.RequestBodyType))
     {
-      string paramName = operation.RequestBodyType.ToDotNetCamelCase();
       string fullyQualifiedType = operation.RequestBodyType;
 
       // Apply type name overrides from configuration
       fullyQualifiedType = ApplyTypeNameOverrides(fullyQualifiedType);
+
+      // Derive parameter name from the (possibly overridden) type name
+      string paramName = fullyQualifiedType.ToDotNetCamelCase();
 
       // Check if this schema was split into Request/Response models
       // If so, use the Request variant for POST/PUT/PATCH operations
@@ -878,7 +880,7 @@ public class ClientGenerator
     // Add logging before HTTP call
     if (_options.UseILogger)
     {
-      sb.AppendLine($"{indent}HttpClientLog.RequestStarted(_logger, \"{operation.Method.ToUpperInvariant()}\", url);");
+      sb.AppendLine($"{indent}HttpClientLog.LogDebugRequestStarted(_logger, \"{operation.Method.ToUpperInvariant()}\", url);");
     }
 
     switch (operation.Method.ToUpperInvariant())
@@ -889,13 +891,13 @@ public class ClientGenerator
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", \"[multipart/form-data]\");");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"POST\", \"multipart/form-data\", \"[binary content]\");");
             }
           }
           else if (operation.RequestContentType == "application/x-www-form-urlencoded")
@@ -903,7 +905,8 @@ public class ClientGenerator
             sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", \"[application/x-www-form-urlencoded]\");");
+              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync();");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"POST\", \"application/x-www-form-urlencoded\", formBody);");
             }
           }
           else
@@ -911,7 +914,7 @@ public class ClientGenerator
             sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", json);");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"POST\", \"application/json\", json);");
             }
             sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
           }
@@ -926,13 +929,13 @@ public class ClientGenerator
       case "PUT":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", \"[multipart/form-data]\");");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"PUT\", \"multipart/form-data\", \"[binary content]\");");
             }
           }
           else if (operation.RequestContentType == "application/x-www-form-urlencoded")
@@ -940,7 +943,8 @@ public class ClientGenerator
             sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", \"[application/x-www-form-urlencoded]\");");
+              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync();");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"PUT\", \"application/x-www-form-urlencoded\", formBody);");
             }
           }
           else
@@ -948,7 +952,7 @@ public class ClientGenerator
             sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", json);");
+              sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"PUT\", \"application/json\", json);");
             }
             sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
           }
@@ -963,11 +967,11 @@ public class ClientGenerator
       case "PATCH":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = operation.RequestBodyType.ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
           sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
           if (_options.UseILogger)
           {
-            sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PATCH\", json);");
+             sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"PATCH\", \"application/json\", json);");
           }
 
           sb.AppendLine(
@@ -989,7 +993,7 @@ public class ClientGenerator
     if (_options.UseILogger)
     {
       sb.AppendLine($"{indent}long durationMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;");
-      sb.AppendLine($"{indent}HttpClientLog.RequestCompleted(_logger, (int)response.StatusCode, \"{operation.Method.ToUpperInvariant()}\", url, durationMs);");
+      sb.AppendLine($"{indent}HttpClientLog.LogDebugRequestCompleted(_logger, (int)response.StatusCode, \"{operation.Method.ToUpperInvariant()}\", url, durationMs);");
     }
 
     sb.AppendLine();
@@ -1012,7 +1016,7 @@ public class ClientGenerator
         sb.AppendLine($"{indent}catch (HttpRequestException ex)");
         sb.AppendLine($"{indent}{{");
         sb.AppendLine($"{indent}  string errorContent = await response.Content.ReadAsStringAsync();");
-        sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, errorContent, ex);");
+        sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, errorContent, ex);");
         sb.AppendLine($"{indent}  throw;");
         sb.AppendLine($"{indent}}}");
       }
@@ -1037,7 +1041,7 @@ public class ClientGenerator
         sb.AppendLine($"{indent}catch (HttpRequestException ex)");
         sb.AppendLine($"{indent}{{");
         sb.AppendLine($"{indent}  string responseContent = await response.Content.ReadAsStringAsync();");
-        sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
+        sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
         sb.AppendLine($"{indent}  throw;");
         sb.AppendLine($"{indent}}}");
       }
@@ -1061,7 +1065,7 @@ public class ClientGenerator
       sb.AppendLine($"{indent}catch (HttpRequestException ex)");
       sb.AppendLine($"{indent}{{");
       sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
-      sb.AppendLine($"{indent}  HttpClientLog.RequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
+      sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
       sb.AppendLine($"{indent}  throw;");
       sb.AppendLine($"{indent}}}");
     }
@@ -1073,7 +1077,7 @@ public class ClientGenerator
 
     if (_options.UseILogger)
     {
-      sb.AppendLine($"{indent}HttpClientLog.ResponseBody(_logger, url, responseContent);");
+      sb.AppendLine($"{indent}HttpClientLog.LogTraceResponseBody(_logger, url, responseContent);");
     }
 
     if (operation.ResponseType != null)
@@ -2739,63 +2743,63 @@ public class SmartEnumConverterFactory : JsonConverterFactory
     sb.AppendLine("internal static partial class HttpClientLog");
     sb.AppendLine("{");
 
-    // 1001: Request started
+    // 1001: Request started (Debug)
     sb.AppendLine($"{indent}[LoggerMessage(EventId = 1001, Level = LogLevel.Debug,");
     sb.AppendLine($"{indent}{indent}Message = \"Making {{Method}} request to {{Url}}\")]");
-    sb.AppendLine($"{indent}private static partial void RequestStartedCore(ILogger logger, string method, string url);");
+    sb.AppendLine($"{indent}private static partial void LogDebugRequestStartedCore(ILogger logger, string method, string url);");
     sb.AppendLine();
-    sb.AppendLine($"{indent}public static void RequestStarted(ILogger? logger, string method, string url)");
+    sb.AppendLine($"{indent}public static void LogDebugRequestStarted(ILogger? logger, string method, string url)");
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
-    sb.AppendLine($"{indent}{indent}{indent}RequestStartedCore(logger, method, url);");
+    sb.AppendLine($"{indent}{indent}{indent}LogDebugRequestStartedCore(logger, method, url);");
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 
-    // 1002: Request completed
+    // 1002: Request completed (Debug)
     sb.AppendLine($"{indent}[LoggerMessage(EventId = 1002, Level = LogLevel.Debug,");
     sb.AppendLine($"{indent}{indent}Message = \"Received {{StatusCode}} response from {{Method}} {{Url}} in {{DurationMs}}ms\")]");
-    sb.AppendLine($"{indent}private static partial void RequestCompletedCore(ILogger logger, int statusCode, string method, string url, long durationMs);");
+    sb.AppendLine($"{indent}private static partial void LogDebugRequestCompletedCore(ILogger logger, int statusCode, string method, string url, long durationMs);");
     sb.AppendLine();
-    sb.AppendLine($"{indent}public static void RequestCompleted(ILogger? logger, int statusCode, string method, string url, long durationMs)");
+    sb.AppendLine($"{indent}public static void LogDebugRequestCompleted(ILogger? logger, int statusCode, string method, string url, long durationMs)");
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
-    sb.AppendLine($"{indent}{indent}{indent}RequestCompletedCore(logger, statusCode, method, url, durationMs);");
+    sb.AppendLine($"{indent}{indent}{indent}LogDebugRequestCompletedCore(logger, statusCode, method, url, durationMs);");
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 
-    // 3001: Request failed
+    // 3001: Request failed (Error)
     sb.AppendLine($"{indent}[LoggerMessage(EventId = 3001, Level = LogLevel.Error,");
     sb.AppendLine($"{indent}{indent}Message = \"HTTP {{StatusCode}} error for {{Method}} {{Url}}. Response: {{ResponseContent}}\")]");
-    sb.AppendLine($"{indent}private static partial void RequestFailedCore(ILogger logger, int statusCode, string method, string url, string responseContent, Exception? exception);");
+    sb.AppendLine($"{indent}private static partial void LogErrorRequestFailedCore(ILogger logger, int statusCode, string method, string url, string responseContent, Exception? exception);");
     sb.AppendLine();
-    sb.AppendLine($"{indent}public static void RequestFailed(ILogger? logger, int statusCode, string method, string url, string responseContent, Exception? exception)");
+    sb.AppendLine($"{indent}public static void LogErrorRequestFailed(ILogger? logger, int statusCode, string method, string url, string responseContent, Exception? exception)");
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
-    sb.AppendLine($"{indent}{indent}{indent}RequestFailedCore(logger, statusCode, method, url, responseContent, exception);");
+    sb.AppendLine($"{indent}{indent}{indent}LogErrorRequestFailedCore(logger, statusCode, method, url, responseContent, exception);");
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 
-    // 1003: Request body (trace level)
+    // 1003: Request body (Trace)
     sb.AppendLine($"{indent}[LoggerMessage(EventId = 1003, Level = LogLevel.Trace,");
-    sb.AppendLine($"{indent}{indent}Message = \"{{Method}} request body: {{Body}}\")]");
-    sb.AppendLine($"{indent}private static partial void RequestBodyCore(ILogger logger, string method, string body);");
+    sb.AppendLine($"{indent}{indent}Message = \"{{Method}} request body [{{ContentType}}]: {{Body}}\")]");
+    sb.AppendLine($"{indent}private static partial void LogTraceRequestBodyCore(ILogger logger, string method, string contentType, string body);");
     sb.AppendLine();
-    sb.AppendLine($"{indent}public static void RequestBody(ILogger? logger, string method, string body)");
+    sb.AppendLine($"{indent}public static void LogTraceRequestBody(ILogger? logger, string method, string contentType, string body)");
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
-    sb.AppendLine($"{indent}{indent}{indent}RequestBodyCore(logger, method, body);");
+    sb.AppendLine($"{indent}{indent}{indent}LogTraceRequestBodyCore(logger, method, contentType, body);");
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 
-    // 2003: Response body (trace level)
+    // 2003: Response body (Trace)
     sb.AppendLine($"{indent}[LoggerMessage(EventId = 2003, Level = LogLevel.Trace,");
     sb.AppendLine($"{indent}{indent}Message = \"Response from {{Url}}: {{Body}}\")]");
-    sb.AppendLine($"{indent}private static partial void ResponseBodyCore(ILogger logger, string url, string body);");
+    sb.AppendLine($"{indent}private static partial void LogTraceResponseBodyCore(ILogger logger, string url, string body);");
     sb.AppendLine();
-    sb.AppendLine($"{indent}public static void ResponseBody(ILogger? logger, string url, string body)");
+    sb.AppendLine($"{indent}public static void LogTraceResponseBody(ILogger? logger, string url, string body)");
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
-    sb.AppendLine($"{indent}{indent}{indent}ResponseBodyCore(logger, url, body);");
+    sb.AppendLine($"{indent}{indent}{indent}LogTraceResponseBodyCore(logger, url, body);");
     sb.AppendLine($"{indent}}}");
 
     sb.AppendLine("}");

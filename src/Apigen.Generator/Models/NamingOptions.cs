@@ -15,6 +15,15 @@ public class NamingOptions
   /// </summary>
   public List<PathBasedOverride> PathBasedOverrides { get; set; } = new();
 
+  /// <summary>
+  /// Global name overrides: original spec name -> desired C# name.
+  /// Applied BEFORE ToDotNetPascalCase. If a match is found, the override
+  /// value is used as-is and ToDotNetPascalCase is skipped.
+  /// Works on property names, enum member names, and parameter names.
+  /// Keys are matched case-insensitively.
+  /// </summary>
+  public Dictionary<string, string> Overrides { get; set; } = new();
+
 }
 
 /// <summary>

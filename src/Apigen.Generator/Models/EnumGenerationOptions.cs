@@ -148,6 +148,7 @@ public class EnumMemberInfo
 /// </summary>
 public enum EnumGenerationStrategy
 {
+  UseVarNames, // Use x-enum-varnames (explicit names from spec)
   PreserveValues, // Values are already developer-friendly
   UseDescriptions, // Use x-enumDescriptions
   ParseDescription, // Parse description field for mappings
