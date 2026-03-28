@@ -25,7 +25,7 @@ Apigen uses TOML configuration files. Example:
 ```toml
 input_path = "specs/my-api.yaml"
 output_path = "src"
-target_framework = "net9.0"
+target_framework = "net10.0"
 generate_nullable_reference_types = true
 generate_data_annotations = true
 
