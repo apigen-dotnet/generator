@@ -102,6 +102,16 @@ public class ClientGenerator
       result.RequestFiles.Add(multipartHelper);
     }
 
+    // Generate form-urlencoded content helper if any operations use it
+    bool hasFormUrlEncodedOps = analysis.Resources
+      .SelectMany(r => r.Operations)
+      .Any(o => o.RequestContentType == "application/x-www-form-urlencoded");
+    if (hasFormUrlEncodedOps)
+    {
+      GeneratedFile formHelper = GenerateFormUrlEncodedContentExtensions();
+      result.RequestFiles.Add(formHelper);
+    }
+
     // Generate HTTP client logging (if ILogger is enabled)
     if (_options.UseILogger)
     {
@@ -271,11 +281,8 @@ public class ClientGenerator
       }
     }
 
-    // If no auth schemes, generate a default token-based factory
-    if (!analysis.AuthenticationSchemes.Any())
-    {
-      GenerateAuthFactory(sb, indent, analysis, analysis.Authentication, uniqueResources);
-    }
+    // If no auth schemes detected from the spec, skip factory generation
+    // (the user can always pass their own HttpClient to the constructor)
 
     // Token-based authentication HttpClient factory
     sb.AppendLine($"{indent}private static HttpClient CreateTokenAuthHttpClient(string apiToken, string baseUrl, string headerName, bool useBearer)");
@@ -891,6 +898,14 @@ public class ClientGenerator
               sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", \"[multipart/form-data]\");");
             }
           }
+          else if (operation.RequestContentType == "application/x-www-form-urlencoded")
+          {
+            sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"POST\", \"[application/x-www-form-urlencoded]\");");
+            }
+          }
           else
           {
             sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
@@ -918,6 +933,14 @@ public class ClientGenerator
             if (_options.UseILogger)
             {
               sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", \"[multipart/form-data]\");");
+            }
+          }
+          else if (operation.RequestContentType == "application/x-www-form-urlencoded")
+          {
+            sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
+            if (_options.UseILogger)
+            {
+              sb.AppendLine($"{indent}HttpClientLog.RequestBody(_logger, \"PUT\", \"[application/x-www-form-urlencoded]\");");
             }
           }
           else
@@ -2348,6 +2371,51 @@ public class ClientGenerator
     return new GeneratedFile
     {
       FileName = "MultipartContentExtensions.cs",
+      Content = sb.ToString(),
+    };
+  }
+
+  private GeneratedFile GenerateFormUrlEncodedContentExtensions()
+  {
+    StringBuilder sb = new();
+    sb.AppendLine("using System.Net.Http;");
+    sb.AppendLine("using System.Reflection;");
+    sb.AppendLine("using System.Text.Json.Serialization;");
+    sb.AppendLine();
+    sb.AppendLine($"namespace {_options.Namespace};");
+    sb.AppendLine();
+    sb.AppendLine("internal static class FormUrlEncodedContentExtensions");
+    sb.AppendLine("{");
+    sb.AppendLine("  /// <summary>");
+    sb.AppendLine("  /// Converts a DTO object to FormUrlEncodedContent for OAuth2 token endpoints and similar.");
+    sb.AppendLine("  /// Uses JsonPropertyName attribute for field names. Null properties are omitted.");
+    sb.AppendLine("  /// </summary>");
+    sb.AppendLine("  public static FormUrlEncodedContent ToFormUrlEncodedContent(this object dto)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    List<KeyValuePair<string, string>> fields = new();");
+    sb.AppendLine();
+    sb.AppendLine("    foreach (PropertyInfo prop in dto.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))");
+    sb.AppendLine("    {");
+    sb.AppendLine("      object? value = prop.GetValue(dto);");
+    sb.AppendLine("      if (value == null) continue;");
+    sb.AppendLine();
+    sb.AppendLine("      string fieldName = prop.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? prop.Name;");
+    sb.AppendLine();
+    sb.AppendLine("      if (value is bool boolValue)");
+    sb.AppendLine("        fields.Add(new(fieldName, boolValue.ToString().ToLowerInvariant()));");
+    sb.AppendLine("      else if (value is int or long or short or byte)");
+    sb.AppendLine("        fields.Add(new(fieldName, value.ToString()!));");
+    sb.AppendLine("      else");
+    sb.AppendLine("        fields.Add(new(fieldName, value.ToString() ?? \"\"));");
+    sb.AppendLine("    }");
+    sb.AppendLine();
+    sb.AppendLine("    return new FormUrlEncodedContent(fields);");
+    sb.AppendLine("  }");
+    sb.AppendLine("}");
+
+    return new GeneratedFile
+    {
+      FileName = "FormUrlEncodedContentExtensions.cs",
       Content = sb.ToString(),
     };
   }

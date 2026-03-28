@@ -38,6 +38,7 @@ public class OpenApiAnalysis
 
 public enum AuthSchemeType
 {
+  None,
   ApiKey,
   Http,
   OAuth2
@@ -62,7 +63,7 @@ public enum HttpAuthScheme
 public class AuthenticationScheme
 {
   public string Name { get; set; } = string.Empty;
-  public AuthSchemeType Type { get; set; } = AuthSchemeType.ApiKey;
+  public AuthSchemeType Type { get; set; } = AuthSchemeType.None;
   public AuthSchemeLocation In { get; set; } = AuthSchemeLocation.Header;
   public string? HeaderName { get; set; }
   public string? CookieName { get; set; }
@@ -132,7 +133,7 @@ public class ResponsePattern
 {
   public bool IsWrapped { get; set; } // true if responses are wrapped in {data: [], meta: {}}
   public string? DataProperty { get; set; } = "data";
-  public string? MetaProperty { get; set; } = "meta";
+  public string? MetaProperty { get; set; }
   public bool HasPagination { get; set; }
   public Dictionary<string, string> MetaProperties { get; set; } = new(); // property name -> type
 
