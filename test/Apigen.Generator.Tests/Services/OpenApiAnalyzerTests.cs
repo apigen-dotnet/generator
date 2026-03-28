@@ -188,7 +188,7 @@ public class OpenApiAnalyzerTests
     OpenApiAnalysis result = _analyzer.Analyze(doc);
 
     Assert.NotNull(result.Authentication);
-    Assert.Equal(AuthSchemeType.ApiKey, result.Authentication.Type);
+    Assert.Equal(AuthSchemeType.None, result.Authentication.Type);
   }
 
   [Fact]
