@@ -35,4 +35,26 @@ public class OpenApiSpecReader
       return result.OpenApiDocument;
     }
   }
+
+  /// <summary>
+  /// Apply a path prefix to all paths in the document.
+  /// E.g., prefix="/identity" turns "/connect/token" into "/identity/connect/token"
+  /// </summary>
+  public static void ApplyPathPrefix(OpenApiDocument document, string prefix)
+  {
+    if (string.IsNullOrEmpty(prefix) || document.Paths == null)
+      return;
+
+    // Normalize: remove trailing slash from prefix
+    string normalizedPrefix = prefix.TrimEnd('/');
+
+    var originalPaths = document.Paths.ToList();
+    document.Paths.Clear();
+
+    foreach (var kvp in originalPaths)
+    {
+      string newPath = normalizedPrefix + kvp.Key;
+      document.Paths[newPath] = kvp.Value;
+    }
+  }
 }
