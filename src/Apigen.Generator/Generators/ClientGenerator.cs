@@ -677,6 +677,9 @@ public class ClientGenerator
   {
     string baseType = operation.ResponseType ?? "object";
 
+    // Resolve to canonical schema name if this was deduplicated
+    baseType = ResolveCanonicalSchemaName(baseType);
+
     // Handle void responses (204 No Content or no response body)
     if (baseType == "void")
     {
@@ -725,7 +728,10 @@ public class ClientGenerator
     // Add request body parameter
     if (!string.IsNullOrEmpty(operation.RequestBodyType))
     {
-      string fullyQualifiedType = operation.RequestBodyType;
+      // Resolve to canonical schema name if this was deduplicated
+      string resolvedType = ResolveCanonicalSchemaName(operation.RequestBodyType);
+
+      string fullyQualifiedType = resolvedType;
 
       // Apply type name overrides from configuration
       fullyQualifiedType = ApplyTypeNameOverrides(fullyQualifiedType);
@@ -735,7 +741,7 @@ public class ClientGenerator
 
       // Check if this schema was split into Request/Response models
       // If so, use the Request variant for POST/PUT/PATCH operations
-      if (_modelDecisions != null && _modelDecisions.TryGetValue(operation.RequestBodyType, out ModelGenerationDecision? decision))
+      if (_modelDecisions != null && _modelDecisions.TryGetValue(resolvedType, out ModelGenerationDecision? decision))
       {
         if (decision.ShouldSplit)
         {
@@ -891,7 +897,7 @@ public class ClientGenerator
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -929,7 +935,7 @@ public class ClientGenerator
       case "PUT":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -967,7 +973,7 @@ public class ClientGenerator
       case "PATCH":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(operation.RequestBodyType).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
           sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
           if (_options.UseILogger)
           {
@@ -1082,7 +1088,8 @@ public class ClientGenerator
 
     if (operation.ResponseType != null)
     {
-      string? fullyQualifiedResponseType = operation.ResponseType;
+      // Resolve to canonical schema name if this was deduplicated
+      string? fullyQualifiedResponseType = ResolveCanonicalSchemaName(operation.ResponseType);
 
       // Apply response type overrides from configuration (same logic as GetReturnType)
       foreach (ResponseTypeOverride responseOverride in _options.ResponseTypeOverrides)
@@ -2075,6 +2082,22 @@ public class ClientGenerator
 
     // Restore array suffix if it was present
     return isArray ? $"{baseType}[]" : baseType;
+  }
+
+  /// <summary>
+  /// Resolves a schema name to its canonical form if it was deduplicated.
+  /// Returns the original name if no deduplication mapping exists.
+  /// </summary>
+  private string ResolveCanonicalSchemaName(string schemaName)
+  {
+    if (_modelDecisions != null &&
+        _modelDecisions.TryGetValue(schemaName, out ModelGenerationDecision? decision) &&
+        decision.SkipGeneration &&
+        decision.CanonicalSchemaName != null)
+    {
+      return decision.CanonicalSchemaName;
+    }
+    return schemaName;
   }
 
   private string FullyQualifyModelTypes(string typeExpression)

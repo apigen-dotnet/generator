@@ -113,10 +113,14 @@ public class ModelGenerator
       ModelDeduplicator deduplicator = new ModelDeduplicator(usageMap, variants);
       decisions = deduplicator.MakeDecisions();
 
+      // Cross-schema deduplication: eliminate identical schemas
+      deduplicator.DeduplicateAcrossSchemas();
+
       // Log decisions for debugging
       int splitCount = decisions.Values.Count(d => d.ShouldSplit);
-      int unifiedCount = decisions.Count - splitCount;
-      Console.WriteLine($"Decisions: {splitCount} schemas will split, {unifiedCount} will remain unified");
+      int skippedCount = decisions.Values.Count(d => d.SkipGeneration);
+      int unifiedCount = decisions.Count - splitCount - skippedCount;
+      Console.WriteLine($"Decisions: {splitCount} schemas will split, {unifiedCount} will remain unified, {skippedCount} duplicates skipped");
     }
 
     if (document.Components?.Schemas != null)
@@ -182,6 +186,12 @@ public class ModelGenerator
     // Check if this schema should be split into Request/Response models
     if (decisions != null && decisions.TryGetValue(schemaName, out ModelGenerationDecision? decision))
     {
+      // Skip duplicates identified by cross-schema deduplication
+      if (decision.SkipGeneration)
+      {
+        return;
+      }
+
       if (decision.ShouldGenerateMethodSpecificModels)
       {
         // Generate method-specific models (Create/Update/Patch)
@@ -912,7 +922,8 @@ public class ModelGenerator
           OpenApiSchema? schema = content?.Schema;
 
           // Only process inline schemas (not references)
-          if (schema?.Properties != null && schema.Properties.Any())
+          // A $ref schema has Reference set even after resolution, so check that
+          if (schema?.Reference == null && schema?.Properties != null && schema.Properties.Any())
           {
             string? operationId = operation.Value.OperationId;
             if (!string.IsNullOrEmpty(operationId))

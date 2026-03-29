@@ -306,6 +306,111 @@ public class ModelDeduplicator
   }
 
   /// <summary>
+  /// Deduplicates schemas across different schema names that have identical structure.
+  /// Groups schemas by their structure hash (per variant role), picks a canonical name,
+  /// and marks duplicates with SkipGeneration=true and CanonicalSchemaName.
+  /// </summary>
+  public void DeduplicateAcrossSchemas()
+  {
+    // Build groups: (variantType, structureHash) → list of schema names
+    // Only group schemas that share the same role (both request or both response)
+    Dictionary<(SchemaVariantType, string), List<string>> hashGroups = new();
+
+    foreach (KeyValuePair<string, ModelGenerationDecision> entry in _decisions)
+    {
+      string schemaName = entry.Key;
+      ModelGenerationDecision decision = entry.Value;
+
+      // Skip schemas already marked for skip (idempotent)
+      if (decision.SkipGeneration)
+      {
+        continue;
+      }
+
+      if (!_variants.TryGetValue(schemaName, out Dictionary<SchemaVariantType, SchemaVariant>? variants))
+      {
+        continue;
+      }
+
+      // Use Request variant hash if available, otherwise Response
+      SchemaVariantType role;
+      string hash;
+
+      if (variants.TryGetValue(SchemaVariantType.Request, out SchemaVariant? requestVariant))
+      {
+        role = SchemaVariantType.Request;
+        hash = requestVariant.StructureHash;
+      }
+      else if (variants.TryGetValue(SchemaVariantType.Response, out SchemaVariant? responseVariant))
+      {
+        role = SchemaVariantType.Response;
+        hash = responseVariant.StructureHash;
+      }
+      else
+      {
+        continue;
+      }
+
+      (SchemaVariantType, string) key = (role, hash);
+      if (!hashGroups.ContainsKey(key))
+      {
+        hashGroups[key] = new List<string>();
+      }
+
+      hashGroups[key].Add(schemaName);
+    }
+
+    // For each group with >1 entry, find related schemas and mark duplicates
+    foreach (KeyValuePair<(SchemaVariantType, string), List<string>> group in hashGroups)
+    {
+      List<string> schemas = group.Value;
+
+      if (schemas.Count <= 1)
+      {
+        continue;
+      }
+
+      // Only dedup schemas that are naming-related (e.g., PatchedFoo ↔ Foo)
+      // Don't merge unrelated schemas that happen to have the same structure
+      foreach (string schemaName in schemas)
+      {
+        string? relatedCanonical = FindRelatedCanonical(schemaName, schemas);
+        if (relatedCanonical == null)
+        {
+          continue;
+        }
+
+        if (_decisions.TryGetValue(schemaName, out ModelGenerationDecision? decision))
+        {
+          decision.SkipGeneration = true;
+          decision.CanonicalSchemaName = relatedCanonical;
+          Console.WriteLine($"  Dedup: {schemaName} → {relatedCanonical} (identical structure)");
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// Finds a related canonical schema name within a group of structurally identical schemas.
+  /// Only returns a canonical if the schema has a naming relationship (e.g., PatchedFoo → Foo).
+  /// Returns null if no naming relationship exists (prevents merging unrelated schemas).
+  /// </summary>
+  private static string? FindRelatedCanonical(string schemaName, List<string> group)
+  {
+    // Check if this schema is a "Patched" variant of another schema in the group
+    if (schemaName.StartsWith("Patched", StringComparison.OrdinalIgnoreCase))
+    {
+      string baseName = schemaName.Substring("Patched".Length);
+      if (group.Contains(baseName))
+      {
+        return baseName;
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
   /// Gets the decision for a specific schema
   /// </summary>
   public ModelGenerationDecision? GetDecision(string schemaName)
@@ -332,4 +437,15 @@ public class ModelGenerationDecision
   public string? CreateModelName { get; set; }  // POST
   public string? UpdateModelName { get; set; }  // PUT
   public string? PatchModelName { get; set; }   // PATCH
+
+  /// <summary>
+  /// If true, this schema is a duplicate of CanonicalSchemaName and should not be generated.
+  /// </summary>
+  public bool SkipGeneration { get; set; }
+
+  /// <summary>
+  /// The schema name that this duplicate should map to.
+  /// Only set when SkipGeneration is true.
+  /// </summary>
+  public string? CanonicalSchemaName { get; set; }
 }

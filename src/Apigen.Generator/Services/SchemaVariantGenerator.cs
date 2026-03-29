@@ -175,7 +175,29 @@ public class SchemaVariantGenerator
       sb.Append($"{propName}:");
       sb.Append($"{propSchema.Type}:");
       sb.Append($"{propSchema.Format}:");
+      sb.Append($"{propSchema.Nullable}:");
+      sb.Append($"{propSchema.ReadOnly}:");
+      sb.Append($"{propSchema.WriteOnly}:");
       sb.Append($"{variant.Required.Contains(propName)}:");
+      sb.Append($"{propSchema.MaxLength}:");
+      sb.Append($"{propSchema.MinLength}:");
+      sb.Append($"{propSchema.Maximum}:");
+      sb.Append($"{propSchema.Minimum}:");
+      sb.Append($"{propSchema.ExclusiveMaximum}:");
+      sb.Append($"{propSchema.ExclusiveMinimum}:");
+      sb.Append($"{propSchema.Pattern}:");
+      sb.Append($"default:{SerializeOpenApiAny(propSchema.Default)}:");
+
+      // Include enum values - different enums = different schema
+      if (propSchema.Enum is { Count: > 0 })
+      {
+        sb.Append("enum:");
+        foreach (var enumVal in propSchema.Enum.OrderBy(e => SerializeOpenApiAny(e)))
+        {
+          sb.Append($"{SerializeOpenApiAny(enumVal)},");
+        }
+        sb.Append(':');
+      }
 
       // Include nested reference (which variant it refers to)
       if (variant.NestedReferences.TryGetValue(propName, out string? refSchema))
@@ -220,6 +242,26 @@ public class SchemaVariantGenerator
     byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
     byte[] hash = sha256.ComputeHash(bytes);
     return Convert.ToBase64String(hash);
+  }
+
+  /// <summary>
+  /// Serializes an IOpenApiAny value to a stable string for hashing.
+  /// </summary>
+  private static string SerializeOpenApiAny(Microsoft.OpenApi.Any.IOpenApiAny? value)
+  {
+    if (value == null) return "";
+
+    return value switch
+    {
+      Microsoft.OpenApi.Any.OpenApiString s => $"str:{s.Value}",
+      Microsoft.OpenApi.Any.OpenApiInteger i => $"int:{i.Value}",
+      Microsoft.OpenApi.Any.OpenApiLong l => $"long:{l.Value}",
+      Microsoft.OpenApi.Any.OpenApiFloat f => $"float:{f.Value}",
+      Microsoft.OpenApi.Any.OpenApiDouble d => $"double:{d.Value}",
+      Microsoft.OpenApi.Any.OpenApiBoolean b => $"bool:{b.Value}",
+      Microsoft.OpenApi.Any.OpenApiNull => "null",
+      _ => value.GetType().Name
+    };
   }
 
   private string? GetSchemaName(OpenApiSchema? schema)
