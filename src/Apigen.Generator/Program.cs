@@ -1,62 +1,101 @@
-﻿using Apigen.Generator.Generators;
+using System.CommandLine;
+using Apigen.Generator.Generators;
 using Apigen.Generator.Models;
 using Apigen.Generator.Services;
-using System.Linq;
 using Microsoft.OpenApi.Models;
 
 namespace Apigen.Generator;
 
 internal class Program
 {
-  private static async Task Main(string[] args)
+  static int Main(string[] args)
   {
-    if (args.Length == 0)
+    Argument<string?> specArg = new("spec")
     {
-      Console.WriteLine("Usage: ApiGenerator <openapi-spec-path> [output-path] [namespace] [--config <config-file>]");
-      Console.WriteLine("   or: ApiGenerator --config <config-file>");
-      Console.WriteLine();
-      Console.WriteLine("Arguments:");
-      Console.WriteLine("  openapi-spec-path : Path or URL to OpenAPI specification (required unless using config)");
-      Console.WriteLine("  output-path       : Output directory (default: Generated)");
-      Console.WriteLine("  namespace         : Base namespace for generated code (default: GeneratedApi.Models)");
-      Console.WriteLine();
-      Console.WriteLine("Options:");
-      Console.WriteLine("  --config <file>   : Use configuration file (default: apigen-config.json if exists)");
-      Console.WriteLine("  --create-config   : Create a sample configuration file");
-      return;
-    }
+      Description = "Path or URL to OpenAPI specification",
+      Arity = ArgumentArity.ZeroOrOne
+    };
 
-    // Handle --create-config
-    if (args.Contains("--create-config"))
+    Argument<string?> outputArg = new("output")
     {
-      await CreateSampleConfigAsync();
-      return;
-    }
+      Description = "Output directory",
+      Arity = ArgumentArity.ZeroOrOne
+    };
 
-    // Load configuration
-    GeneratorConfiguration config = await LoadConfigurationAsync(args);
+    Argument<string?> namespaceArg = new("namespace")
+    {
+      Description = "Base namespace for generated code",
+      Arity = ArgumentArity.ZeroOrOne
+    };
 
-    // Override with command line arguments (skip --config args)
-    int configIndex = Array.IndexOf(args, "--config");
-    string? configPath = configIndex >= 0 && configIndex < args.Length - 1 ? args[configIndex + 1] : null;
-    List<string> positionalArgs = args.Where(a => !a.StartsWith("--") && a != configPath).ToList();
+    Option<string?> configOption = new("--config", "-c")
+    {
+      Description = "Configuration file (TOML or JSON)"
+    };
 
-    if (positionalArgs.Count > 0)
+    Option<bool> savePatchedOption = new("--save-patched")
+    {
+      Description = "Write patched spec for diagnosis"
+    };
+
+    RootCommand rootCommand = new("OpenAPI to C# client generator")
+    {
+      specArg,
+      outputArg,
+      namespaceArg,
+      configOption,
+      savePatchedOption
+    };
+
+    rootCommand.SetAction(parseResult =>
+    {
+      string? spec = parseResult.GetValue(specArg);
+      string? output = parseResult.GetValue(outputArg);
+      string? ns = parseResult.GetValue(namespaceArg);
+      string? config = parseResult.GetValue(configOption);
+      bool savePatched = parseResult.GetValue(savePatchedOption);
+
+      RunGeneratorAsync(spec, output, ns, config, savePatched).GetAwaiter().GetResult();
+    });
+
+    Command createConfigCommand = new("create-config")
+    {
+      Description = "Create a sample configuration file"
+    };
+    createConfigCommand.SetAction(_ =>
+    {
+      CreateSampleConfigAsync().GetAwaiter().GetResult();
+    });
+    rootCommand.Subcommands.Add(createConfigCommand);
+
+    return rootCommand.Parse(args).Invoke();
+  }
+
+  private static async Task RunGeneratorAsync(
+    string? specPath,
+    string? outputPath,
+    string? namespaceName,
+    string? configPath,
+    bool savePatched)
+  {
+    GeneratorConfiguration config = await LoadConfigurationAsync(configPath);
+
+    if (!string.IsNullOrEmpty(specPath))
     {
       config.Specs = new List<SpecConfiguration>
       {
-        new() { Path = positionalArgs[0], PathPrefix = "" }
+        new() { Path = specPath, PathPrefix = "" }
       };
     }
 
-    if (positionalArgs.Count > 1)
+    if (!string.IsNullOrEmpty(outputPath))
     {
-      config.OutputPath = positionalArgs[1];
+      config.OutputPath = outputPath;
     }
 
-    if (positionalArgs.Count > 2)
+    if (!string.IsNullOrEmpty(namespaceName))
     {
-      config.Models.Namespace = positionalArgs[2];
+      config.Models.Namespace = namespaceName;
     }
 
     if (config.Specs.Count == 0 || config.Specs.All(s => string.IsNullOrEmpty(s.Path)))
@@ -101,6 +140,29 @@ internal class Program
       Console.WriteLine($"OpenAPI: {document.Info.Title}");
       Console.WriteLine($"Found {document.Paths?.Count ?? 0} paths, {document.Components?.Schemas?.Count ?? 0} schemas");
 
+      // Apply spec patches if patches directory exists
+      string configDir = configPath != null ? Path.GetDirectoryName(Path.GetFullPath(configPath))! : Directory.GetCurrentDirectory();
+      string patchesDir = Path.Combine(configDir, "patches");
+      if (Directory.Exists(patchesDir) && Directory.GetFiles(patchesDir, "*.cs").Length > 0)
+      {
+        SpecPatcher patcher = new();
+        patcher.LoadPatches(patchesDir);
+        int patchCount = patcher.ApplyPatches(document);
+
+        if (patchCount > 0 && savePatched)
+        {
+          string firstSpecPath = config.Specs[0].Path;
+          string patchedPath = Path.ChangeExtension(firstSpecPath, ".patched.yaml");
+          using FileStream fs = File.Create(patchedPath);
+          using StreamWriter sw = new(fs);
+          Microsoft.OpenApi.Writers.OpenApiYamlWriter yamlWriter = new(sw);
+          document.SerializeAsV3(yamlWriter);
+          Console.WriteLine($"Patched spec written to: {patchedPath}");
+        }
+
+        Console.WriteLine($"Found {document.Paths?.Count ?? 0} paths, {document.Components?.Schemas?.Count ?? 0} schemas (after patches)");
+      }
+
       // Generate models
       ModelGenerator modelGenerator = new(options, config);
       Dictionary<string, ModelGenerationDecision>? modelDecisions = await modelGenerator.GenerateModelsAsync(document);
@@ -109,9 +171,7 @@ internal class Program
       if (config.Client.GenerateClient)
       {
         Console.WriteLine("Generating API client...");
-        // Set the models namespace from the main config
         config.Client.ModelsNamespace = config.Models.Namespace;
-        // Copy response type overrides from main config to client config
         config.Client.ResponseTypeOverrides = config.ResponseTypeOverrides;
         ClientGenerator clientGenerator = new(
           config.Client,
@@ -136,24 +196,14 @@ internal class Program
     }
   }
 
-  private static async Task<GeneratorConfiguration> LoadConfigurationAsync(string[] args)
+  private static async Task<GeneratorConfiguration> LoadConfigurationAsync(string? configPath)
   {
-    string? configPath = null;
-
-    // Check for --config argument
-    int configIndex = Array.IndexOf(args, "--config");
-    if (configIndex >= 0 && configIndex < args.Length - 1)
+    if (string.IsNullOrEmpty(configPath))
     {
-      configPath = args[configIndex + 1];
-    }
-    // Check for default config files (prefer TOML over JSON)
-    else if (File.Exists("apigen-config.toml"))
-    {
-      configPath = "apigen-config.toml";
-    }
-    else if (File.Exists("apigen-config.json"))
-    {
-      configPath = "apigen-config.json";
+      if (File.Exists("apigen-config.toml"))
+        configPath = "apigen-config.toml";
+      else if (File.Exists("apigen-config.json"))
+        configPath = "apigen-config.json";
     }
 
     if (!string.IsNullOrEmpty(configPath))
@@ -188,9 +238,9 @@ internal class Program
       },
     };
 
-    string configPath = "apigen-config.json";
-    await config.SaveToFileAsync(configPath);
-    Console.WriteLine($"Sample configuration file created: {configPath}");
+    string path = "apigen-config.json";
+    await config.SaveToFileAsync(path);
+    Console.WriteLine($"Sample configuration file created: {path}");
     Console.WriteLine("Edit this file to customize code generation settings.");
   }
 }

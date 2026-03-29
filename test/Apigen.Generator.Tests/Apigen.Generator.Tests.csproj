@@ -22,4 +22,9 @@
     <ProjectReference Include="..\..\src\Apigen.Generator\Apigen.Generator.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="TestPatches\**\*.cs" />
+    <Content Include="TestPatches\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
