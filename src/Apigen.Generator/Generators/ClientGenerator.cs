@@ -1874,12 +1874,20 @@ public class ClientGenerator
     }
     else
     {
+      // Use scheme name to generate unique factory method name when multiple API key schemes exist
+      string methodName = string.IsNullOrEmpty(authScheme.Name)
+        ? "WithApiKey"
+        : $"With{authScheme.Name.ToDotNetPascalCase()}";
+      string paramName = string.IsNullOrEmpty(authScheme.Name)
+        ? "apiKey"
+        : authScheme.Name.ToDotNetCamelCase() ?? "apiKey";
+
       sb.AppendLine($"{indent}/// <summary>");
-      sb.AppendLine($"{indent}/// Create client with API key authentication");
+      sb.AppendLine($"{indent}/// Create client with {authScheme.HeaderName} authentication");
       sb.AppendLine($"{indent}/// </summary>");
-      sb.AppendLine($"{indent}public static {_options.ClientClassName} WithApiKey(string apiKey, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
+      sb.AppendLine($"{indent}public static {_options.ClientClassName} {methodName}(string {paramName}, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
       sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateTokenAuthHttpClient(apiKey, baseUrl, \"{authScheme.HeaderName}\", false);");
+      sb.AppendLine($"{indent}{indent}HttpClient httpClient = CreateTokenAuthHttpClient({paramName}, baseUrl, \"{authScheme.HeaderName}\", false);");
       sb.AppendLine($"{indent}{indent}return new {_options.ClientClassName}(httpClient, true{loggerArg});");
       sb.AppendLine($"{indent}}}");
     }
