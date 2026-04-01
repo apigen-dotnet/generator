@@ -1,5 +1,6 @@
 using Apigen.Generator.Services;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
+using System.Text.Json.Nodes;
 
 namespace Apigen.Generator.Tests.Services;
 
@@ -72,9 +73,9 @@ public class OpenApiSpecMergerTests
       Paths = new OpenApiPaths(),
       Components = new OpenApiComponents
       {
-        SecuritySchemes = new Dictionary<string, OpenApiSecurityScheme>
+        SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>
         {
-          ["bearer"] = new() { Type = SecuritySchemeType.Http, Scheme = "bearer" }
+          ["bearer"] = new OpenApiSecurityScheme { Type = SecuritySchemeType.Http, Scheme = "bearer" }
         }
       }
     };
@@ -84,9 +85,9 @@ public class OpenApiSpecMergerTests
       Paths = new OpenApiPaths(),
       Components = new OpenApiComponents
       {
-        SecuritySchemes = new Dictionary<string, OpenApiSecurityScheme>
+        SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>
         {
-          ["oauth2"] = new() { Type = SecuritySchemeType.OAuth2 }
+          ["oauth2"] = new OpenApiSecurityScheme { Type = SecuritySchemeType.OAuth2 }
         }
       }
     };
@@ -157,8 +158,8 @@ public class OpenApiSpecMergerTests
   [Fact]
   public void AreSchemasStructurallyEqual_DifferentTypes_ReturnsFalse()
   {
-    var a = new OpenApiSchema { Type = "object" };
-    var b = new OpenApiSchema { Type = "string" };
+    var a = new OpenApiSchema { Type = JsonSchemaType.Object };
+    var b = new OpenApiSchema { Type = JsonSchemaType.String };
 
     Assert.False(OpenApiSpecMerger.AreSchemasStructurallyEqual(a, b));
   }
@@ -192,14 +193,13 @@ public class OpenApiSpecMergerTests
 
   private static OpenApiDocument CreateDocWithSchema(string title, string schemaName, OpenApiSchema schema)
   {
+    var components = new OpenApiComponents();
+    components.Schemas = new Dictionary<string, IOpenApiSchema> { [schemaName] = schema };
     return new OpenApiDocument
     {
       Info = new OpenApiInfo { Title = title, Version = "1.0" },
       Paths = new OpenApiPaths(),
-      Components = new OpenApiComponents
-      {
-        Schemas = new Dictionary<string, OpenApiSchema> { [schemaName] = schema }
-      }
+      Components = components
     };
   }
 
@@ -207,10 +207,10 @@ public class OpenApiSpecMergerTests
   {
     return new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        [propertyName] = new() { Type = "string" }
+        [propertyName] = new OpenApiSchema { Type = JsonSchemaType.String }
       }
     };
   }
@@ -219,11 +219,11 @@ public class OpenApiSpecMergerTests
   {
     return new OpenApiSchema
     {
-      Type = "integer",
-      Enum = new List<Microsoft.OpenApi.Any.IOpenApiAny>
+      Type = JsonSchemaType.Integer,
+      Enum = new List<JsonNode?>
       {
-        new Microsoft.OpenApi.Any.OpenApiInteger(0),
-        new Microsoft.OpenApi.Any.OpenApiInteger(1),
+        JsonValue.Create(0),
+        JsonValue.Create(1),
       }
     };
   }

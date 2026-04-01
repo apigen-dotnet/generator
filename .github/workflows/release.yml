@@ -27,18 +27,3 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           generateReleaseNotes: false
-
-      - name: Notify client repos
-        env:
-          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "DISPATCH_TOKEN not set, skipping client notifications"
-            exit 0
-          fi
-          for repo in invoiceninja keycloak paperless-ngx vikunja immich; do
-            echo "Notifying apigen-dotnet/$repo..."
-            gh api repos/apigen-dotnet/$repo/dispatches \
-              -f event_type=generator-release \
-              -f "client_payload[version]=${{ github.ref_name }}" || true
-          done

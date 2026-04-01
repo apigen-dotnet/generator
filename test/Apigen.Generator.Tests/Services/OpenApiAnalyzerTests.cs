@@ -1,4 +1,4 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Apigen.Generator.Services;
 using Apigen.Generator.Models;
 
@@ -8,7 +8,7 @@ public class OpenApiAnalyzerTests
 {
   private readonly OpenApiAnalyzer _analyzer = new();
 
-  private static OpenApiDocument CreateDocument(Dictionary<string, OpenApiSecurityScheme>? securitySchemes = null)
+  private static OpenApiDocument CreateDocument(Dictionary<string, IOpenApiSecurityScheme>? securitySchemes = null)
   {
     return new OpenApiDocument
     {
@@ -16,7 +16,7 @@ public class OpenApiAnalyzerTests
       Paths = new OpenApiPaths(),
       Components = new OpenApiComponents
       {
-        SecuritySchemes = securitySchemes ?? new Dictionary<string, OpenApiSecurityScheme>()
+        SecuritySchemes = securitySchemes ?? new Dictionary<string, IOpenApiSecurityScheme>()
       }
     };
   }
@@ -24,7 +24,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_ApiKeyInHeader_DetectedCorrectly()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["api_key"] = new OpenApiSecurityScheme
       {
@@ -46,7 +46,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_BearerScheme_DetectedCorrectly()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["bearerAuth"] = new OpenApiSecurityScheme
       {
@@ -67,7 +67,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_BearerScheme_CaseInsensitive()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["auth"] = new OpenApiSecurityScheme
       {
@@ -87,7 +87,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_CookieScheme_DetectedCorrectly()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["cookieAuth"] = new OpenApiSecurityScheme
       {
@@ -109,7 +109,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_BasicAuth_DetectedCorrectly()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["basicAuth"] = new OpenApiSecurityScheme
       {
@@ -130,7 +130,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_MultipleSchemes_AllDetected()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["bearer"] = new OpenApiSecurityScheme
       {
@@ -194,7 +194,7 @@ public class OpenApiAnalyzerTests
   [Fact]
   public void Analyze_OAuth2Scheme_DetectedCorrectly()
   {
-    OpenApiDocument doc = CreateDocument(new Dictionary<string, OpenApiSecurityScheme>
+    OpenApiDocument doc = CreateDocument(new Dictionary<string, IOpenApiSecurityScheme>
     {
       ["oauth2"] = new OpenApiSecurityScheme
       {

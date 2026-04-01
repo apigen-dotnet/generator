@@ -1,5 +1,6 @@
+using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 namespace Apigen.Generator.Services;
 
@@ -26,7 +27,7 @@ public class SchemaUsageAnalyzer
     // Initialize usage entries for all schemas
     if (_document.Components?.Schemas != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> schema in _document.Components.Schemas)
+      foreach (var schema in _document.Components.Schemas)
       {
         _usageMap[schema.Key] = new SchemaUsage { SchemaName = schema.Key };
       }
@@ -35,12 +36,12 @@ public class SchemaUsageAnalyzer
     // Analyze operations
     if (_document.Paths != null)
     {
-      foreach (KeyValuePair<string, OpenApiPathItem> path in _document.Paths)
+      foreach (var path in _document.Paths)
       {
-        foreach (KeyValuePair<Microsoft.OpenApi.Models.OperationType, OpenApiOperation> operation in path.Value.Operations)
+        foreach (var operation in path.Value?.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
         {
           string operationId = operation.Value.OperationId ?? $"{operation.Key}_{path.Key}";
-          string httpMethod = operation.Key.ToString().ToUpperInvariant();
+          string httpMethod = operation.Key.Method.ToUpperInvariant();
           AnalyzeOperation(operationId, httpMethod, operation.Value);
         }
       }
@@ -49,9 +50,9 @@ public class SchemaUsageAnalyzer
     // Analyze schema references to build dependency graph
     if (_document.Components?.Schemas != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> schema in _document.Components.Schemas)
+      foreach (var schema in _document.Components.Schemas)
       {
-        AnalyzeSchemaReferences(schema.Key, schema.Value);
+        AnalyzeSchemaReferences(schema.Key, (OpenApiSchema)schema.Value);
       }
     }
 
@@ -66,7 +67,7 @@ public class SchemaUsageAnalyzer
     // Check request body
     if (operation.RequestBody?.Content != null)
     {
-      foreach (OpenApiMediaType mediaType in operation.RequestBody.Content.Values)
+      foreach (var mediaType in operation.RequestBody.Content.Values)
       {
         string? schemaName = GetSchemaName(mediaType.Schema);
         if (schemaName != null && _usageMap.ContainsKey(schemaName))
@@ -80,11 +81,11 @@ public class SchemaUsageAnalyzer
     // Check responses
     if (operation.Responses != null)
     {
-      foreach (OpenApiResponse response in operation.Responses.Values)
+      foreach (var response in operation.Responses.Values)
       {
         if (response.Content != null)
         {
-          foreach (OpenApiMediaType mediaType in response.Content.Values)
+          foreach (var mediaType in response.Content.Values)
           {
             string? schemaName = GetSchemaName(mediaType.Schema);
             if (schemaName != null && _usageMap.ContainsKey(schemaName))
@@ -110,7 +111,7 @@ public class SchemaUsageAnalyzer
     // Check for readOnly/writeOnly properties at this level
     if (schema.Properties != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
+      foreach (var property in schema.Properties)
       {
         if (property.Value.ReadOnly)
         {
@@ -144,7 +145,7 @@ public class SchemaUsageAnalyzer
     }
 
     // Check allOf, oneOf, anyOf
-    foreach (OpenApiSchema? subSchema in schema.AllOf ?? Enumerable.Empty<OpenApiSchema>())
+    foreach (var subSchema in schema.AllOf ?? Enumerable.Empty<IOpenApiSchema>())
     {
       string? refSchema = GetSchemaName(subSchema);
       if (refSchema != null && _usageMap.ContainsKey(refSchema))
@@ -193,14 +194,9 @@ public class SchemaUsageAnalyzer
     } while (changed && iteration < maxIterations);
   }
 
-  private string? GetSchemaName(OpenApiSchema? schema)
+  private string? GetSchemaName(IOpenApiSchema? schema)
   {
-    if (schema?.Reference?.Id != null)
-    {
-      return schema.Reference.Id;
-    }
-
-    return null;
+    return schema?.GetSchemaReferenceName();
   }
 
   /// <summary>

@@ -1,4 +1,4 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Apigen.Generator.Services;
 using Apigen.Generator.Models;
 
@@ -23,7 +23,7 @@ public class TypeMapperTests
   [InlineData(false, "string")]
   public void MapOpenApiTypeToClr_StringType_ReturnsStringWithNullability(bool useNullable, string expected)
   {
-    OpenApiSchema schema = new() { Type = "string" };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String };
 
     string result = _mapper.MapOpenApiTypeToClr(schema, useNullable);
 
@@ -33,7 +33,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_StringDateTimeFormat_ReturnsNullableDateTime()
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "date-time", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "date-time" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -43,7 +43,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_StringDateTimeFormat_NonNullable_ReturnsDateTime()
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "date-time", Nullable = false };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String, Format = "date-time" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -53,7 +53,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_StringDateFormat_ReturnsNullableDateOnly()
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "date", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "date" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -63,7 +63,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_StringUuidFormat_ReturnsNullableGuid()
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "uuid", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "uuid" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -73,7 +73,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_StringGuidFormat_ReturnsNullableGuid()
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "guid", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "guid" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -86,7 +86,7 @@ public class TypeMapperTests
   [InlineData(false, false, "byte[]")]
   public void MapOpenApiTypeToClr_StringBinaryFormat_ReturnsByteArray(bool useNullable, bool nullable, string expected)
   {
-    OpenApiSchema schema = new() { Type = "string", Format = "binary", Nullable = nullable };
+    OpenApiSchema schema = new() { Type = nullable ? JsonSchemaType.String | JsonSchemaType.Null : JsonSchemaType.String, Format = "binary" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema, useNullable);
 
@@ -96,7 +96,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_IntegerType_ReturnsNullableInt()
   {
-    OpenApiSchema schema = new() { Type = "integer", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Integer | JsonSchemaType.Null };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -106,7 +106,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_IntegerNonNullable_ReturnsInt()
   {
-    OpenApiSchema schema = new() { Type = "integer", Nullable = false };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Integer };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -116,7 +116,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_IntegerInt64Format_ReturnsNullableLong()
   {
-    OpenApiSchema schema = new() { Type = "integer", Format = "int64", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Integer | JsonSchemaType.Null, Format = "int64" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -126,7 +126,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_NumberType_ReturnsNullableDecimal()
   {
-    OpenApiSchema schema = new() { Type = "number", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Number | JsonSchemaType.Null };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -136,7 +136,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_NumberFloatFormat_ReturnsNullableFloat()
   {
-    OpenApiSchema schema = new() { Type = "number", Format = "float", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Number | JsonSchemaType.Null, Format = "float" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -146,7 +146,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_NumberDoubleFormat_ReturnsNullableDouble()
   {
-    OpenApiSchema schema = new() { Type = "number", Format = "double", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Number | JsonSchemaType.Null, Format = "double" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -156,7 +156,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_BooleanType_ReturnsNullableBool()
   {
-    OpenApiSchema schema = new() { Type = "boolean", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Boolean | JsonSchemaType.Null };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -166,7 +166,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_BooleanNonNullable_ReturnsBool()
   {
-    OpenApiSchema schema = new() { Type = "boolean", Nullable = false };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Boolean };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -178,8 +178,8 @@ public class TypeMapperTests
   {
     OpenApiSchema schema = new()
     {
-      Type = "array",
-      Items = new OpenApiSchema { Type = "string" }
+      Type = JsonSchemaType.Array,
+      Items = new OpenApiSchema { Type = JsonSchemaType.String }
     };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
@@ -192,8 +192,8 @@ public class TypeMapperTests
   {
     OpenApiSchema schema = new()
     {
-      Type = "array",
-      Items = new OpenApiSchema { Type = "string" }
+      Type = JsonSchemaType.Array,
+      Items = new OpenApiSchema { Type = JsonSchemaType.String }
     };
 
     string result = _mapper.MapOpenApiTypeToClr(schema, useNullable: false);
@@ -204,7 +204,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_ObjectType_ReturnsNullableObject()
   {
-    OpenApiSchema schema = new() { Type = "object" };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Object };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
@@ -216,8 +216,8 @@ public class TypeMapperTests
   {
     OpenApiSchema schema = new()
     {
-      Type = "object",
-      AdditionalProperties = new OpenApiSchema { Type = "string" }
+      Type = JsonSchemaType.Object,
+      AdditionalProperties = new OpenApiSchema { Type = JsonSchemaType.String }
     };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
@@ -228,7 +228,7 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_UseNullableFalse_OmitsQuestionMark()
   {
-    OpenApiSchema schema = new() { Type = "integer", Nullable = true };
+    OpenApiSchema schema = new() { Type = JsonSchemaType.Integer | JsonSchemaType.Null };
 
     string result = _mapper.MapOpenApiTypeToClr(schema, useNullable: false);
 
@@ -238,7 +238,8 @@ public class TypeMapperTests
   [Fact]
   public void MapOpenApiTypeToClr_UnknownType_ReturnsNullableObject()
   {
-    OpenApiSchema schema = new() { Type = "unknown" };
+    // In 3.x there's no unknown string type, so use a schema with no type set
+    OpenApiSchema schema = new();
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 

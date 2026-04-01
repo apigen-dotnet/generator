@@ -1,4 +1,5 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
+using System.Text.Json.Nodes;
 using Apigen.Generator.Services;
 using Apigen.Generator.Models;
 
@@ -8,21 +9,24 @@ public class ModelDeduplicatorTests
 {
   /// <summary>
   /// Creates a minimal OpenApiDocument with the given schemas and paths that reference them.
-  /// Each schema entry maps a schema name to its properties (name → type).
+  /// Each schema entry maps a schema name to its properties (name u2192 type).
   /// Each path entry maps a path to operations referencing schemas.
   /// </summary>
   private static OpenApiDocument CreateDocument(
     Dictionary<string, OpenApiSchema> schemas,
     OpenApiPaths? paths = null)
   {
+    var components = new OpenApiComponents();
+    components.Schemas = new Dictionary<string, IOpenApiSchema>();
+    foreach (var kvp in schemas)
+    {
+      components.Schemas[kvp.Key] = kvp.Value;
+    }
     return new OpenApiDocument
     {
       Info = new OpenApiInfo { Title = "Test API", Version = "1.0" },
       Paths = paths ?? new OpenApiPaths(),
-      Components = new OpenApiComponents
-      {
-        Schemas = schemas
-      }
+      Components = components
     };
   }
 
@@ -35,13 +39,13 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schema = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>()
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>()
     };
 
     foreach (string name in propertyNames)
     {
-      schema.Properties[name] = new OpenApiSchema { Type = "string" };
+      schema.Properties[name] = new OpenApiSchema { Type = JsonSchemaType.String };
     }
 
     if (required != null)
@@ -65,24 +69,20 @@ public class ModelDeduplicatorTests
       string schemaName = schemaNames[i];
       OpenApiPathItem pathItem = new OpenApiPathItem
       {
-        Operations = new Dictionary<Microsoft.OpenApi.Models.OperationType, OpenApiOperation>
+        Operations = new Dictionary<HttpMethod, OpenApiOperation>
         {
-          [Microsoft.OpenApi.Models.OperationType.Post] = new OpenApiOperation
+          [HttpMethod.Post] = new OpenApiOperation
           {
             OperationId = $"create_{schemaName}_{i}",
             RequestBody = new OpenApiRequestBody
             {
-              Content = new Dictionary<string, OpenApiMediaType>
+              Content = new Dictionary<string, IOpenApiMediaType>
               {
                 ["application/json"] = new OpenApiMediaType
                 {
                   Schema = new OpenApiSchema
                   {
-                    Reference = new OpenApiReference
-                    {
-                      Type = ReferenceType.Schema,
-                      Id = schemaName
-                    }
+                    Id = schemaName
                   }
                 }
               }
@@ -102,7 +102,7 @@ public class ModelDeduplicatorTests
   }
 
   /// <summary>
-  /// Runs the full pipeline: SchemaUsageAnalyzer → SchemaVariantGenerator → ModelDeduplicator → DeduplicateAcrossSchemas
+  /// Runs the full pipeline: SchemaUsageAnalyzer u2192 SchemaVariantGenerator u2192 ModelDeduplicator u2192 DeduplicateAcrossSchemas
   /// </summary>
   private static Dictionary<string, ModelGenerationDecision> RunFullPipeline(OpenApiDocument document)
   {
@@ -193,7 +193,7 @@ public class ModelDeduplicatorTests
     // Act
     Dictionary<string, ModelGenerationDecision> decisions = RunFullPipeline(document);
 
-    // Assert: different required fields → different structure hash → neither is skipped
+    // Assert: different required fields u2192 different structure hash u2192 neither is skipped
     Assert.False(decisions["Foo"].SkipGeneration);
     Assert.Null(decisions["Foo"].CanonicalSchemaName);
 
@@ -280,21 +280,21 @@ public class ModelDeduplicatorTests
     // Arrange: Same property names/types but different nullable status
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["name"] = new OpenApiSchema { Type = "string", Nullable = false },
-        ["value"] = new OpenApiSchema { Type = "integer", Nullable = false }
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String },
+        ["value"] = new OpenApiSchema { Type = JsonSchemaType.Integer }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["name"] = new OpenApiSchema { Type = "string", Nullable = true },
-        ["value"] = new OpenApiSchema { Type = "integer", Nullable = false }
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String | JsonSchemaType.Null },
+        ["value"] = new OpenApiSchema { Type = JsonSchemaType.Integer }
       }
     };
 
@@ -311,7 +311,7 @@ public class ModelDeduplicatorTests
     // Act
     Dictionary<string, ModelGenerationDecision> decisions = RunFullPipeline(document);
 
-    // Assert: different nullable → different structure hash → neither is skipped
+    // Assert: different nullable u2192 different structure hash u2192 neither is skipped
     Assert.False(decisions["Foo"].SkipGeneration);
     Assert.Null(decisions["Foo"].CanonicalSchemaName);
 
@@ -325,19 +325,19 @@ public class ModelDeduplicatorTests
     // Arrange: Same property names/types but different maxLength
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["name"] = new OpenApiSchema { Type = "string", MaxLength = 128 }
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String, MaxLength = 128 }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["name"] = new OpenApiSchema { Type = "string", MaxLength = 256 }
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String, MaxLength = 256 }
       }
     };
 
@@ -354,7 +354,7 @@ public class ModelDeduplicatorTests
     // Act
     Dictionary<string, ModelGenerationDecision> decisions = RunFullPipeline(document);
 
-    // Assert: different maxLength → different structure hash → neither is skipped
+    // Assert: different maxLength u2192 different structure hash u2192 neither is skipped
     Assert.False(decisions["Foo"].SkipGeneration);
     Assert.False(decisions["Bar"].SkipGeneration);
   }
@@ -364,21 +364,21 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["id"] = new OpenApiSchema { Type = "integer", ReadOnly = true },
-        ["name"] = new OpenApiSchema { Type = "string" }
+        ["id"] = new OpenApiSchema { Type = JsonSchemaType.Integer, ReadOnly = true },
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["id"] = new OpenApiSchema { Type = "integer", ReadOnly = false },
-        ["name"] = new OpenApiSchema { Type = "string" }
+        ["id"] = new OpenApiSchema { Type = JsonSchemaType.Integer, ReadOnly = false },
+        ["name"] = new OpenApiSchema { Type = JsonSchemaType.String }
       }
     };
 
@@ -403,19 +403,19 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["password"] = new OpenApiSchema { Type = "string", WriteOnly = true }
+        ["password"] = new OpenApiSchema { Type = JsonSchemaType.String, WriteOnly = true }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["password"] = new OpenApiSchema { Type = "string", WriteOnly = false }
+        ["password"] = new OpenApiSchema { Type = JsonSchemaType.String, WriteOnly = false }
       }
     };
 
@@ -440,26 +440,26 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
         ["enabled"] = new OpenApiSchema
         {
-          Type = "boolean",
-          Default = new Microsoft.OpenApi.Any.OpenApiBoolean(true)
+          Type = JsonSchemaType.Boolean,
+          Default = JsonValue.Create(true)
         }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
         ["enabled"] = new OpenApiSchema
         {
-          Type = "boolean",
-          Default = new Microsoft.OpenApi.Any.OpenApiBoolean(false)
+          Type = JsonSchemaType.Boolean,
+          Default = JsonValue.Create(false)
         }
       }
     };
@@ -485,16 +485,16 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
         ["status"] = new OpenApiSchema
         {
-          Type = "string",
-          Enum = new List<Microsoft.OpenApi.Any.IOpenApiAny>
+          Type = JsonSchemaType.String,
+          Enum = new List<JsonNode?>
           {
-            new Microsoft.OpenApi.Any.OpenApiString("active"),
-            new Microsoft.OpenApi.Any.OpenApiString("inactive")
+            JsonValue.Create("active"),
+            JsonValue.Create("inactive")
           }
         }
       }
@@ -502,16 +502,16 @@ public class ModelDeduplicatorTests
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
         ["status"] = new OpenApiSchema
         {
-          Type = "string",
-          Enum = new List<Microsoft.OpenApi.Any.IOpenApiAny>
+          Type = JsonSchemaType.String,
+          Enum = new List<JsonNode?>
           {
-            new Microsoft.OpenApi.Any.OpenApiString("active"),
-            new Microsoft.OpenApi.Any.OpenApiString("deleted")
+            JsonValue.Create("active"),
+            JsonValue.Create("deleted")
           }
         }
       }
@@ -538,19 +538,19 @@ public class ModelDeduplicatorTests
   {
     OpenApiSchema schemaA = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["score"] = new OpenApiSchema { Type = "integer", Minimum = 0, Maximum = 100 }
+        ["score"] = new OpenApiSchema { Type = JsonSchemaType.Integer, Minimum = "0", Maximum = "100" }
       }
     };
 
     OpenApiSchema schemaB = new OpenApiSchema
     {
-      Type = "object",
-      Properties = new Dictionary<string, OpenApiSchema>
+      Type = JsonSchemaType.Object,
+      Properties = new Dictionary<string, IOpenApiSchema>
       {
-        ["score"] = new OpenApiSchema { Type = "integer", Minimum = 0, Maximum = 1000 }
+        ["score"] = new OpenApiSchema { Type = JsonSchemaType.Integer, Minimum = "0", Maximum = "1000" }
       }
     };
 

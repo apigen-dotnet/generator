@@ -1,5 +1,5 @@
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Readers;
+using Microsoft.OpenApi;
+using Microsoft.OpenApi.Reader;
 
 namespace Apigen.Generator.Services;
 
@@ -7,33 +7,37 @@ public class OpenApiSpecReader
 {
   public async Task<OpenApiDocument> ReadSpecificationAsync(string path)
   {
-    Stream stream;
+    string content;
 
     if (Uri.TryCreate(path, UriKind.Absolute, out Uri? uri) &&
         (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
     {
       using HttpClient httpClient = new();
-      stream = await httpClient.GetStreamAsync(uri);
+      content = await httpClient.GetStringAsync(uri);
     }
     else
     {
-      stream = File.OpenRead(path);
+      content = await File.ReadAllTextAsync(path);
     }
 
-    using (stream)
+    // Detect format: JSON starts with '{' or '[', otherwise assume YAML
+    string trimmed = content.TrimStart();
+    string format = trimmed.StartsWith('{') || trimmed.StartsWith('[') ? OpenApiConstants.Json : OpenApiConstants.Yaml;
+
+    var settings = new OpenApiReaderSettings();
+    settings.AddYamlReader(); // Register the YAML reader from Microsoft.OpenApi.YamlReader
+
+    using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
+    var result = await OpenApiDocument.LoadAsync(stream, format, settings);
+
+    OpenApiDiagnostic? diagnostic = result.Diagnostic;
+    if (diagnostic?.Errors?.Count > 0)
     {
-      OpenApiStreamReader reader = new();
-      ReadResult? result = await reader.ReadAsync(stream);
-
-      OpenApiDiagnostic? diagnostic = result.OpenApiDiagnostic;
-      if (diagnostic?.Errors?.Count > 0)
-      {
-        string errors = string.Join("\n", diagnostic.Errors.Select(e => e.Message));
-        throw new InvalidOperationException($"Failed to parse OpenAPI specification:\n{errors}");
-      }
-
-      return result.OpenApiDocument;
+      string errors = string.Join("\n", diagnostic.Errors.Select(e => e.Message));
+      throw new InvalidOperationException($"Failed to parse OpenAPI specification:\n{errors}");
     }
+
+    return result.Document ?? throw new InvalidOperationException("OpenAPI document could not be parsed \u2014 result was null.");
   }
 
   /// <summary>
@@ -45,7 +49,6 @@ public class OpenApiSpecReader
     if (string.IsNullOrEmpty(prefix) || document.Paths == null)
       return;
 
-    // Normalize: remove trailing slash from prefix
     string normalizedPrefix = prefix.TrimEnd('/');
 
     var originalPaths = document.Paths.ToList();

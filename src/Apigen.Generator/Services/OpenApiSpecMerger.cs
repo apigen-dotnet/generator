@@ -1,4 +1,5 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
+using Apigen.Generator.Extensions;
 
 namespace Apigen.Generator.Services;
 
@@ -24,6 +25,9 @@ public static class OpenApiSpecMerger
     if (docs.Count == 1)
       return docs[0];
 
+    var components = new OpenApiComponents();
+    components.Schemas = new Dictionary<string, IOpenApiSchema>();
+    components.SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>();
     var merged = new OpenApiDocument
     {
       Info = new OpenApiInfo
@@ -32,11 +36,7 @@ public static class OpenApiSpecMerger
         Version = docs[0].Info.Version,
       },
       Paths = new OpenApiPaths(),
-      Components = new OpenApiComponents
-      {
-        Schemas = new Dictionary<string, OpenApiSchema>(),
-        SecuritySchemes = new Dictionary<string, OpenApiSecurityScheme>(),
-      },
+      Components = components,
     };
 
     // Track schema origins for conflict resolution
@@ -65,21 +65,22 @@ public static class OpenApiSpecMerger
       {
         foreach (var schema in doc.Components.Schemas)
         {
+          var schemaValue = schema.Value.ResolveSchema();
           if (!schemaOrigins.ContainsKey(schema.Key))
           {
             // First time seeing this schema name
-            schemaOrigins[schema.Key] = (schema.Value, doc.Info.Title);
-            merged.Components.Schemas[schema.Key] = schema.Value;
+            schemaOrigins[schema.Key] = (schemaValue, doc.Info.Title ?? "Unknown");
+            merged.Components.Schemas[schema.Key] = schemaValue;
           }
           else
           {
             // Schema name already exists -- check if structurally identical
-            if (!AreSchemasStructurallyEqual(schemaOrigins[schema.Key].Schema, schema.Value))
+            if (!AreSchemasStructurallyEqual(schemaOrigins[schema.Key].Schema, schemaValue))
             {
               // Conflict: different structure, same name
-              string prefixedName = GenerateConflictName(schema.Key, doc.Info.Title);
+              string prefixedName = GenerateConflictName(schema.Key, doc.Info.Title ?? "Unknown");
               Console.WriteLine($"Warning: Schema '{schema.Key}' differs between specs. Adding as '{prefixedName}' from '{doc.Info.Title}'.");
-              merged.Components.Schemas[prefixedName] = schema.Value;
+              merged.Components.Schemas[prefixedName] = schemaValue;
 
               // Update $ref references in this doc's paths to point to the prefixed name
               UpdateSchemaReferences(doc, schema.Key, prefixedName);
@@ -128,7 +129,7 @@ public static class OpenApiSpecMerger
           return false;
         if (prop.Value.Format != bProp.Format)
           return false;
-        if (prop.Value.Nullable != bProp.Nullable)
+        if (prop.Value.ResolveSchema().IsNullable() != bProp.ResolveSchema().IsNullable())
           return false;
       }
     }
@@ -162,48 +163,38 @@ public static class OpenApiSpecMerger
 
   /// <summary>
   /// Update $ref references in a document's paths when a schema has been renamed due to conflict
+  /// In OpenApi 3.x, schema references use the Id property instead of a Reference object.
   /// </summary>
   private static void UpdateSchemaReferences(OpenApiDocument doc, string oldName, string newName)
   {
     if (doc.Paths == null) return;
 
-    string oldRef = $"#/components/schemas/{oldName}";
-    string newRef = $"#/components/schemas/{newName}";
-
     foreach (var pathItem in doc.Paths.Values)
     {
-      foreach (var operation in pathItem.Operations.Values)
+      foreach (var operation in pathItem.Operations?.Values ?? Enumerable.Empty<OpenApiOperation>())
       {
         // Update request body refs
         if (operation.RequestBody?.Content != null)
         {
           foreach (var content in operation.RequestBody.Content.Values)
           {
-            if (content.Schema?.Reference?.Id == oldName)
+            if (content.Schema != null && content.Schema.Id == oldName)
             {
-              content.Schema.Reference = new OpenApiReference
-              {
-                Type = ReferenceType.Schema,
-                Id = newName,
-              };
+              content.Schema.ResolveSchema().Id = newName;
             }
           }
         }
 
         // Update response refs
-        foreach (var response in operation.Responses.Values)
+        foreach (var response in operation.Responses?.Values ?? Enumerable.Empty<IOpenApiResponse>())
         {
           if (response.Content != null)
           {
             foreach (var content in response.Content.Values)
             {
-              if (content.Schema?.Reference?.Id == oldName)
+              if (content.Schema != null && content.Schema.Id == oldName)
               {
-                content.Schema.Reference = new OpenApiReference
-                {
-                  Type = ReferenceType.Schema,
-                  Id = newName,
-                };
+                content.Schema.ResolveSchema().Id = newName;
               }
             }
           }

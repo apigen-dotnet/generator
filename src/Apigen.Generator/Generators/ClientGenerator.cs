@@ -1,4 +1,4 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Apigen.Generator.Models;
 using Apigen.Generator.Services;
 using System.Globalization;

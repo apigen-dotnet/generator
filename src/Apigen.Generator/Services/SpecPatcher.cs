@@ -1,7 +1,7 @@
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 namespace Apigen.Generator.Services;
 
@@ -121,6 +121,12 @@ public class SpecPatcher
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Collections.dll")));
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Linq.dll")));
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "netstandard.dll")));
+
+    // System.Net.Http is needed because OpenApi 3.x uses HttpMethod as key in Operations dictionary
+    references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Net.Http.dll")));
+
+    // System.Text.Json is needed for JsonNode/JsonArray/JsonValue in spec patches
+    references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Text.Json.dll")));
 
     return references;
   }

@@ -1,5 +1,6 @@
 using StringCasing;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
+using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
 
 namespace Apigen.Generator.Services;
@@ -42,9 +43,9 @@ public class TypeMapper
       return "object";
     }
 
-    string nullable = useNullable && schema.Nullable ? "?" : "";
+    string nullable = useNullable && schema.IsNullable() ? "?" : "";
 
-    if (schema.Type == "string")
+    if (schema.IsType(JsonSchemaType.String))
     {
       if (schema.Format == "date-time")
       {
@@ -63,13 +64,13 @@ public class TypeMapper
 
       if (schema.Format == "binary")
       {
-        return "byte[]" + (useNullable && schema.Nullable ? "?" : "");
+        return "byte[]" + (useNullable && schema.IsNullable() ? "?" : "");
       }
 
       return useNullable ? "string?" : "string";
     }
 
-    if (schema.Type == "integer")
+    if (schema.IsType(JsonSchemaType.Integer))
     {
       if (schema.Format == "int64")
       {
@@ -79,7 +80,7 @@ public class TypeMapper
       return $"int{nullable}";
     }
 
-    if (schema.Type == "number")
+    if (schema.IsType(JsonSchemaType.Number))
     {
       if (schema.Format == "float")
       {
@@ -94,22 +95,38 @@ public class TypeMapper
       return $"decimal{nullable}";
     }
 
-    if (schema.Type == "boolean")
+    if (schema.IsType(JsonSchemaType.Boolean))
     {
       return $"bool{nullable}";
     }
 
-    if (schema.Type == "array")
+    if (schema.IsType(JsonSchemaType.Array))
     {
-      string itemType = MapOpenApiTypeToClr(schema.Items, useNullable);
-      return $"List<{itemType}>?";
+      if (schema.Items != null)
+      {
+        // Check for $ref on array items BEFORE resolving
+        string? itemRefName = schema.Items.GetSchemaReferenceName();
+        if (!string.IsNullOrEmpty(itemRefName))
+        {
+          return $"List<{GetClassName(itemRefName)}>?";
+        }
+        string itemType = MapOpenApiTypeToClr(schema.Items.ResolveSchema(), useNullable);
+        return $"List<{itemType}>?";
+      }
+      return "List<object>?";
     }
 
-    if (schema.Type == "object" || schema.Properties?.Count > 0)
+    if (schema.IsType(JsonSchemaType.Object) || schema.Properties?.Count > 0)
     {
       if (schema.AdditionalProperties != null)
       {
-        string valueType = MapOpenApiTypeToClr(schema.AdditionalProperties, useNullable);
+        // Check for $ref on additional properties BEFORE resolving
+        string? addPropRefName = schema.AdditionalProperties.GetSchemaReferenceName();
+        if (!string.IsNullOrEmpty(addPropRefName))
+        {
+          return $"Dictionary<string, {GetClassName(addPropRefName)}>?";
+        }
+        string valueType = MapOpenApiTypeToClr(schema.AdditionalProperties.ResolveSchema(), useNullable);
         return $"Dictionary<string, {valueType}>?";
       }
 
