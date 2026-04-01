@@ -102,7 +102,9 @@ public class TypeMapper
 
     if (schema.IsType(JsonSchemaType.Array))
     {
-      string itemType = MapOpenApiTypeToClr((OpenApiSchema)schema.Items, useNullable);
+      string itemType = schema.Items != null
+        ? MapOpenApiTypeToClr(schema.Items.ResolveSchema(), useNullable)
+        : "object";
       return $"List<{itemType}>?";
     }
 
@@ -110,7 +112,7 @@ public class TypeMapper
     {
       if (schema.AdditionalProperties != null)
       {
-        string valueType = MapOpenApiTypeToClr((OpenApiSchema)schema.AdditionalProperties, useNullable);
+        string valueType = MapOpenApiTypeToClr(schema.AdditionalProperties.ResolveSchema(), useNullable);
         return $"Dictionary<string, {valueType}>?";
       }
 

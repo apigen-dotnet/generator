@@ -65,11 +65,11 @@ public static class OpenApiSpecMerger
       {
         foreach (var schema in doc.Components.Schemas)
         {
-          var schemaValue = (OpenApiSchema)schema.Value;
+          var schemaValue = schema.Value.ResolveSchema();
           if (!schemaOrigins.ContainsKey(schema.Key))
           {
             // First time seeing this schema name
-            schemaOrigins[schema.Key] = (schemaValue, doc.Info.Title);
+            schemaOrigins[schema.Key] = (schemaValue, doc.Info.Title ?? "Unknown");
             merged.Components.Schemas[schema.Key] = schemaValue;
           }
           else
@@ -78,7 +78,7 @@ public static class OpenApiSpecMerger
             if (!AreSchemasStructurallyEqual(schemaOrigins[schema.Key].Schema, schemaValue))
             {
               // Conflict: different structure, same name
-              string prefixedName = GenerateConflictName(schema.Key, doc.Info.Title);
+              string prefixedName = GenerateConflictName(schema.Key, doc.Info.Title ?? "Unknown");
               Console.WriteLine($"Warning: Schema '{schema.Key}' differs between specs. Adding as '{prefixedName}' from '{doc.Info.Title}'.");
               merged.Components.Schemas[prefixedName] = schemaValue;
 
@@ -129,7 +129,7 @@ public static class OpenApiSpecMerger
           return false;
         if (prop.Value.Format != bProp.Format)
           return false;
-        if (((OpenApiSchema)prop.Value).IsNullable() != ((OpenApiSchema)bProp).IsNullable())
+        if (prop.Value.ResolveSchema().IsNullable() != bProp.ResolveSchema().IsNullable())
           return false;
       }
     }
@@ -171,32 +171,30 @@ public static class OpenApiSpecMerger
 
     foreach (var pathItem in doc.Paths.Values)
     {
-      foreach (var operation in pathItem.Operations.Values)
+      foreach (var operation in pathItem.Operations?.Values ?? Enumerable.Empty<OpenApiOperation>())
       {
         // Update request body refs
         if (operation.RequestBody?.Content != null)
         {
           foreach (var content in operation.RequestBody.Content.Values)
           {
-            var schema = (OpenApiSchema?)content.Schema;
-            if (schema != null && schema.Id == oldName)
+            if (content.Schema != null && content.Schema.Id == oldName)
             {
-              schema.Id = newName;
+              content.Schema.ResolveSchema().Id = newName;
             }
           }
         }
 
         // Update response refs
-        foreach (var response in operation.Responses.Values)
+        foreach (var response in operation.Responses?.Values ?? Enumerable.Empty<IOpenApiResponse>())
         {
           if (response.Content != null)
           {
             foreach (var content in response.Content.Values)
             {
-              var schema = (OpenApiSchema?)content.Schema;
-              if (schema != null && schema.Id == oldName)
+              if (content.Schema != null && content.Schema.Id == oldName)
               {
-                schema.Id = newName;
+                content.Schema.ResolveSchema().Id = newName;
               }
             }
           }

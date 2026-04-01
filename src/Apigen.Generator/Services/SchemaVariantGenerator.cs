@@ -37,7 +37,7 @@ public class SchemaVariantGenerator
 
     foreach (var schemaEntry in _document.Components.Schemas)
     {
-      GenerateVariantsForSchema(schemaEntry.Key, (OpenApiSchema)schemaEntry.Value);
+      GenerateVariantsForSchema(schemaEntry.Key, schemaEntry.Value.ResolveSchema());
     }
 
     return _variants;
@@ -85,10 +85,10 @@ public class SchemaVariantGenerator
       {
         if (!property.Value.ReadOnly)
         {
-          variant.Properties[property.Key] = (OpenApiSchema)property.Value;
+          variant.Properties[property.Key] = property.Value.ResolveSchema();
 
           // Track nested references
-          string? refSchema = GetSchemaName((OpenApiSchema?)property.Value);
+          string? refSchema = GetSchemaName(property.Value);
           if (refSchema != null)
           {
             variant.NestedReferences[property.Key] = refSchema;
@@ -131,10 +131,10 @@ public class SchemaVariantGenerator
       {
         if (!property.Value.WriteOnly)
         {
-          variant.Properties[property.Key] = (OpenApiSchema)property.Value;
+          variant.Properties[property.Key] = property.Value.ResolveSchema();
 
           // Track nested references
-          string? refSchema = GetSchemaName((OpenApiSchema?)property.Value);
+          string? refSchema = GetSchemaName(property.Value);
           if (refSchema != null)
           {
             variant.NestedReferences[property.Key] = refSchema;
@@ -220,7 +220,7 @@ public class SchemaVariantGenerator
       // Handle arrays
       if (propSchema.IsType(JsonSchemaType.Array) && propSchema.Items != null)
       {
-        string? itemRef = GetSchemaName((OpenApiSchema?)propSchema.Items);
+        string? itemRef = GetSchemaName(propSchema.Items);
         if (itemRef != null)
         {
           sb.Append($"array:{itemRef}:");
@@ -256,7 +256,7 @@ public class SchemaVariantGenerator
     return value.ToJsonString();
   }
 
-  private string? GetSchemaName(OpenApiSchema? schema)
+  private string? GetSchemaName(IOpenApiSchema? schema)
   {
     if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {

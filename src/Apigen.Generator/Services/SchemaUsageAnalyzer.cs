@@ -37,7 +37,7 @@ public class SchemaUsageAnalyzer
     {
       foreach (var path in _document.Paths)
       {
-        foreach (var operation in path.Value.Operations)
+        foreach (var operation in path.Value?.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
         {
           string operationId = operation.Value.OperationId ?? $"{operation.Key}_{path.Key}";
           string httpMethod = operation.Key.Method.ToUpperInvariant();
@@ -68,7 +68,7 @@ public class SchemaUsageAnalyzer
     {
       foreach (var mediaType in operation.RequestBody.Content.Values)
       {
-        string? schemaName = GetSchemaName((OpenApiSchema?)mediaType.Schema);
+        string? schemaName = GetSchemaName(mediaType.Schema);
         if (schemaName != null && _usageMap.ContainsKey(schemaName))
         {
           _usageMap[schemaName].UsedInRequestBody.Add(operationId);
@@ -86,7 +86,7 @@ public class SchemaUsageAnalyzer
         {
           foreach (var mediaType in response.Content.Values)
           {
-            string? schemaName = GetSchemaName((OpenApiSchema?)mediaType.Schema);
+            string? schemaName = GetSchemaName(mediaType.Schema);
             if (schemaName != null && _usageMap.ContainsKey(schemaName))
             {
               _usageMap[schemaName].UsedInResponse.Add(operationId);
@@ -123,7 +123,7 @@ public class SchemaUsageAnalyzer
         }
 
         // Track nested references
-        string? referencedSchema = GetSchemaName((OpenApiSchema?)property.Value);
+        string? referencedSchema = GetSchemaName(property.Value);
         if (referencedSchema != null && _usageMap.ContainsKey(referencedSchema))
         {
           usage.References.Add(referencedSchema);
@@ -135,7 +135,7 @@ public class SchemaUsageAnalyzer
     // Check array items
     if (schema.Items != null)
     {
-      string? itemSchemaName = GetSchemaName((OpenApiSchema?)schema.Items);
+      string? itemSchemaName = GetSchemaName(schema.Items);
       if (itemSchemaName != null && _usageMap.ContainsKey(itemSchemaName))
       {
         usage.References.Add(itemSchemaName);
@@ -146,7 +146,7 @@ public class SchemaUsageAnalyzer
     // Check allOf, oneOf, anyOf
     foreach (var subSchema in schema.AllOf ?? Enumerable.Empty<IOpenApiSchema>())
     {
-      string? refSchema = GetSchemaName((OpenApiSchema?)subSchema);
+      string? refSchema = GetSchemaName(subSchema);
       if (refSchema != null && _usageMap.ContainsKey(refSchema))
       {
         usage.References.Add(refSchema);
@@ -193,7 +193,7 @@ public class SchemaUsageAnalyzer
     } while (changed && iteration < maxIterations);
   }
 
-  private string? GetSchemaName(OpenApiSchema? schema)
+  private string? GetSchemaName(IOpenApiSchema? schema)
   {
     if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {

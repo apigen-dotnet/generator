@@ -88,7 +88,7 @@ public class EnhancedEnumGenerator
     }
 
     // Check for x-enum-varnames (explicit names from spec generator, highest priority)
-    if (schema.Extensions.ContainsKey("x-enum-varnames"))
+    if (schema.Extensions != null && schema.Extensions.ContainsKey("x-enum-varnames"))
     {
       return EnumGenerationStrategy.UseVarNames;
     }
@@ -100,7 +100,7 @@ public class EnhancedEnumGenerator
     }
 
     // Check for x-enumDescriptions
-    if (schema.Extensions.ContainsKey("x-enumDescriptions"))
+    if (schema.Extensions != null && schema.Extensions.ContainsKey("x-enumDescriptions"))
     {
       return EnumGenerationStrategy.UseDescriptions;
     }
@@ -129,7 +129,8 @@ public class EnhancedEnumGenerator
     if (enumValues == null) return;
 
     List<string>? varNames = null;
-    if (schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt) &&
+    if (schema.Extensions != null &&
+        schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt) &&
         varNamesExt is JsonNodeExtension varNamesJne &&
         varNamesJne.Node is JsonArray varNamesArray)
     {
@@ -495,7 +496,7 @@ public class EnhancedEnumGenerator
   /// </summary>
   private List<JsonNode?>? GetEnumValues(OpenApiSchema schema)
   {
-    return schema.Enum?.ToList();
+    return schema.Enum?.Select(e => (JsonNode?)e).ToList();
   }
 
   /// <summary>
@@ -505,7 +506,8 @@ public class EnhancedEnumGenerator
   {
     Dictionary<string, string> result = new();
 
-    if (schema.Extensions.TryGetValue("x-enumDescriptions", out IOpenApiExtension? extension) &&
+    if (schema.Extensions != null &&
+        schema.Extensions.TryGetValue("x-enumDescriptions", out IOpenApiExtension? extension) &&
         extension is JsonNodeExtension jne &&
         jne.Node is JsonObject obj)
     {

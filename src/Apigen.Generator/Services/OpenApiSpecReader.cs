@@ -31,7 +31,7 @@ public class OpenApiSpecReader
         throw new InvalidOperationException($"Failed to parse OpenAPI specification:\n{errors}");
       }
 
-      return result.Document;
+      return result.Document ?? throw new InvalidOperationException("OpenAPI document could not be parsed — result was null.");
     }
   }
 

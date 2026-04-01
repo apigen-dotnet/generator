@@ -5,6 +5,22 @@ namespace Apigen.Generator.Extensions;
 internal static class OpenApiSchemaExtensions
 {
     /// <summary>
+    /// Resolves an IOpenApiSchema to a concrete OpenApiSchema.
+    /// In Microsoft.OpenApi 3.x, schema collections (Properties, AllOf, OneOf, etc.)
+    /// may contain OpenApiSchemaReference objects instead of OpenApiSchema.
+    /// This method transparently resolves references to their target schema.
+    /// </summary>
+    public static OpenApiSchema ResolveSchema(this IOpenApiSchema schema)
+    {
+        if (schema is OpenApiSchema concrete)
+            return concrete;
+        if (schema is OpenApiSchemaReference reference)
+            return reference.RecursiveTarget ?? throw new InvalidOperationException($"Unresolved schema reference: {reference.Id}");
+        // Fallback: should not happen, but cast will give a clear error
+        return (OpenApiSchema)schema;
+    }
+
+    /// <summary>
     /// Gets the effective type without the Null flag.
     /// </summary>
     public static JsonSchemaType GetEffectiveType(this OpenApiSchema schema)

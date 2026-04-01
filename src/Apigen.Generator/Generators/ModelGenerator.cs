@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using System.Text.Json.Nodes;
 using StringCasing;
@@ -128,13 +129,13 @@ public class ModelGenerator
       foreach (var schema in document.Components.Schemas)
       {
         // Skip schemas that are null-only enums (e.g. {"enum": [null]}) - they represent nullable markers, not real types
-        if (IsNullOnlySchema((OpenApiSchema)schema.Value))
+        if (IsNullOnlySchema(schema.Value.ResolveSchema()))
         {
           Console.WriteLine($"  Skipping null-only schema: {schema.Key}");
           continue;
         }
 
-        await GenerateModelClassAsync(schema.Key, (OpenApiSchema)schema.Value, outputDir, decisions, variantGenerator);
+        await GenerateModelClassAsync(schema.Key, schema.Value.ResolveSchema(), outputDir, decisions, variantGenerator);
       }
     }
 
@@ -358,14 +359,14 @@ public class ModelGenerator
     {
       foreach (var allOfSchema in schema.AllOf)
       {
-        OpenApiSchema resolvedSchema = ResolveSchemaReference((OpenApiSchema)allOfSchema);
+        OpenApiSchema resolvedSchema = ResolveSchemaReference(allOfSchema.ResolveSchema());
 
         // Merge properties
         if (resolvedSchema.Properties != null)
         {
           foreach (var prop in resolvedSchema.Properties)
           {
-            mergedProperties[prop.Key] = (OpenApiSchema)prop.Value;
+            mergedProperties[prop.Key] = prop.Value.ResolveSchema();
           }
         }
 
@@ -385,7 +386,7 @@ public class ModelGenerator
     {
       foreach (var prop in schema.Properties)
       {
-        mergedProperties[prop.Key] = (OpenApiSchema)prop.Value;
+        mergedProperties[prop.Key] = prop.Value.ResolveSchema();
       }
     }
 
@@ -643,7 +644,7 @@ public class ModelGenerator
       string referenceName = schema.Id ?? "";
       if (_currentDocument.Components.Schemas.TryGetValue(referenceName, out var resolvedSchema))
       {
-        return (OpenApiSchema)resolvedSchema;
+        return resolvedSchema.ResolveSchema();
       }
     }
 
@@ -697,7 +698,7 @@ public class ModelGenerator
     // Handle allOf - if there's a single $ref in allOf, resolve it
     if (schema.AllOf != null && schema.AllOf.Count == 1)
     {
-      OpenApiSchema resolvedSchema = ResolveSchemaReference((OpenApiSchema)schema.AllOf[0]);
+      OpenApiSchema resolvedSchema = ResolveSchemaReference(schema.AllOf[0].ResolveSchema());
       return GetPropertyType(resolvedSchema, isRequired, originalPropertyName);
     }
 
@@ -718,7 +719,7 @@ public class ModelGenerator
     // Handle array properties with [] in name - take precedence over OpenAPI array type
     if (isArrayProperty && schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyType((OpenApiSchema)schema.Items, true);
+      string itemType = GetPropertyType(schema.Items.ResolveSchema(), true);
       // Remove List<> wrapper and any nullable modifiers, then make it a C# array
       if (itemType.StartsWith("List<") && itemType.EndsWith(">?"))
       {
@@ -739,13 +740,13 @@ public class ModelGenerator
 
     if (schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyType((OpenApiSchema)schema.Items, true);
+      string itemType = GetPropertyType(schema.Items.ResolveSchema(), true);
       return $"List<{itemType}>?";
     }
 
     if (schema.IsType(JsonSchemaType.Object) && schema.AdditionalProperties != null)
     {
-      string valueType = GetPropertyType((OpenApiSchema)schema.AdditionalProperties, true);
+      string valueType = GetPropertyType(schema.AdditionalProperties.ResolveSchema(), true);
       return $"Dictionary<string, {valueType}>?";
     }
 
@@ -816,7 +817,7 @@ public class ModelGenerator
     bool isIntegerEnum = schema.IsType(JsonSchemaType.Integer);
     List<string>? enumVarNames = null;
 
-    if (isIntegerEnum && schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt))
+    if (isIntegerEnum && schema.Extensions != null && schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt))
     {
       if (varNamesExt is JsonNodeExtension jne && jne.Node is JsonArray varNamesArray)
       {
@@ -824,6 +825,7 @@ public class ModelGenerator
       }
     }
 
+    if (schema.Enum != null)
     for (int i = 0; i < schema.Enum.Count; i++)
     {
       JsonNode? enumValue = schema.Enum[i];
@@ -914,13 +916,13 @@ public class ModelGenerator
 
     foreach (var path in document.Paths)
     {
-      foreach (var operation in path.Value.Operations)
+      foreach (var operation in path.Value?.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
       {
         var requestBody = operation.Value.RequestBody;
         if (requestBody?.Content != null)
         {
           var content = requestBody.Content.FirstOrDefault().Value;
-          OpenApiSchema? schema = (OpenApiSchema?)content?.Schema;
+          OpenApiSchema? schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
           // Only process inline schemas (not references)
           // A $ref schema has an Id set even after resolution, so check that
@@ -961,11 +963,11 @@ public class ModelGenerator
 
       foreach (var kvp in _currentDocument.Components.Schemas)
       {
-        if (IsEnumSchema((OpenApiSchema)kvp.Value))
+        if (IsEnumSchema(kvp.Value.ResolveSchema()))
         {
           string enumClassName = _typeMapper.GetClassName(kvp.Key);
           _generatedEnums.Add(enumClassName);
-          await GenerateEnhancedEnumAsync(kvp.Key, (OpenApiSchema)kvp.Value, enhancedEnumGenerator, outputDir);
+          await GenerateEnhancedEnumAsync(kvp.Key, kvp.Value.ResolveSchema(), enhancedEnumGenerator, outputDir);
         }
       }
     }
@@ -1872,7 +1874,7 @@ public static class EnumExtensions
           }
 
           bool isRequired = schema.Required?.Contains(property.Key) ?? false;
-          GeneratePropertyWithPurpose(sb, property.Key, (OpenApiSchema)property.Value, isRequired, purpose, modelName);
+          GeneratePropertyWithPurpose(sb, property.Key, property.Value.ResolveSchema(), isRequired, purpose, modelName);
           isFirst = false;
         }
       }
@@ -2193,7 +2195,7 @@ public static class EnumExtensions
           }
 
           bool isRequired = schema.Required?.Contains(property.Key) ?? false;
-          GeneratePropertyForVariant(sb, property.Key, (OpenApiSchema)property.Value, isRequired, variantType, modelName);
+          GeneratePropertyForVariant(sb, property.Key, property.Value.ResolveSchema(), isRequired, variantType, modelName);
         }
       }
     }
@@ -2371,7 +2373,7 @@ public static class EnumExtensions
       if (components?.Schemas is { } schemas &&
           schemas.TryGetValue(decision.SchemaName, out var iSchema))
       {
-        var schema = (OpenApiSchema)iSchema;
+        var schema = iSchema.ResolveSchema();
         if (schema.Properties != null)
         {
           // Determine which properties the request model has, with their schemas
@@ -2379,12 +2381,14 @@ public static class EnumExtensions
 
           // Check if there's a separate request schema in the spec
           string requestSchemaName = $"{decision.SchemaName}Request";
-          if (schemas.TryGetValue(requestSchemaName, out var iRequestSchema) &&
-              iRequestSchema.Properties != null)
+          if (schemas.TryGetValue(requestSchemaName, out var iRequestSchema))
           {
-            var requestSchema = (OpenApiSchema)iRequestSchema;
-            foreach (var kvp in requestSchema.Properties)
-              requestProperties[kvp.Key] = (OpenApiSchema)kvp.Value;
+            var requestSchema = iRequestSchema.ResolveSchema();
+            if (requestSchema.Properties != null)
+            {
+              foreach (var kvp in requestSchema.Properties)
+                requestProperties[kvp.Key] = kvp.Value.ResolveSchema();
+            }
           }
 
           // If no separate request schema, use the response schema minus readOnly/writeOnly
@@ -2393,7 +2397,7 @@ public static class EnumExtensions
             foreach (var property in schema.Properties)
             {
               if (!property.Value.ReadOnly && !property.Value.WriteOnly)
-                requestProperties[property.Key] = (OpenApiSchema)property.Value;
+                requestProperties[property.Key] = property.Value.ResolveSchema();
             }
           }
 
@@ -2406,7 +2410,7 @@ public static class EnumExtensions
                 !property.Value.WriteOnly)
             {
               // Compare the final C# types (after property overrides) to ensure compatibility
-              string sourceType = ResolvePropertyType(property.Key, (OpenApiSchema)property.Value, false, decision.SchemaName);
+              string sourceType = ResolvePropertyType(property.Key, property.Value.ResolveSchema(), false, decision.SchemaName);
               string targetType = ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
 
               // Check type compatibility for assignment: target = source

@@ -164,7 +164,10 @@ public class OpenApiAnalyzer
 
     foreach (var path in document.Paths)
     {
-      foreach (var operation in path.Value.Operations)
+      if (path.Value is not OpenApiPathItem pathItem)
+        continue;
+
+      foreach (var operation in pathItem.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
       {
         string? tag = operation.Value.Tags?.FirstOrDefault()?.Name;
         if (string.IsNullOrEmpty(tag))
@@ -190,7 +193,7 @@ public class OpenApiAnalyzer
           OperationId = operation.Value.OperationId ?? $"{operation.Key.Method}{tag}",
           Summary = operation.Value.Summary ?? "",
           Type = DetermineOperationType(operation.Key, path.Key, tag),
-          Parameters = AnalyzeParameters(operation.Value, path.Key, (OpenApiPathItem)path.Value),
+          Parameters = AnalyzeParameters(operation.Value, path.Key, pathItem),
           RequestBodyType = GetRequestBodyType(operation.Value),
           RequestContentType = GetRequestContentType(operation.Value),
           ResponseType = GetResponseType(operation.Value),
@@ -288,11 +291,12 @@ public class OpenApiAnalyzer
     {
       foreach (var param in operation.Parameters)
       {
+        string paramName = param.Name ?? "";
         parameters.Add(
           new ApiParameter
           {
-            Name = param.Name,
-            Type = GetParameterType((OpenApiSchema?)param.Schema),
+            Name = paramName,
+            Type = GetParameterType(param.Schema != null ? param.Schema.ResolveSchema() : null),
             Location = param.In?.ToString().ToLowerInvariant() ?? "query",
             Required = param.Required,
             Description = param.Description,
@@ -301,7 +305,7 @@ public class OpenApiAnalyzer
         // Remove from path params set if explicitly defined
         if (param.In?.ToString().ToLowerInvariant() == "path")
         {
-          pathParamNames.Remove(param.Name);
+          pathParamNames.Remove(paramName);
         }
       }
     }
@@ -311,14 +315,15 @@ public class OpenApiAnalyzer
     {
       foreach (var param in pathItem.Parameters)
       {
+        string paramName = param.Name ?? "";
         // Check if not already added by operation
-        if (!parameters.Any(p => p.Name == param.Name))
+        if (!parameters.Any(p => p.Name == paramName))
         {
           parameters.Add(
             new ApiParameter
             {
-              Name = param.Name,
-              Type = GetParameterType((OpenApiSchema?)param.Schema),
+              Name = paramName,
+              Type = GetParameterType(param.Schema != null ? param.Schema.ResolveSchema() : null),
               Location = param.In?.ToString().ToLowerInvariant() ?? "query",
               Required = param.Required,
               Description = param.Description,
@@ -327,7 +332,7 @@ public class OpenApiAnalyzer
           // Remove from path params set if explicitly defined
           if (param.In?.ToString().ToLowerInvariant() == "path")
           {
-            pathParamNames.Remove(param.Name);
+            pathParamNames.Remove(paramName);
           }
         }
       }
@@ -371,7 +376,7 @@ public class OpenApiAnalyzer
   private string? GetRequestBodyType(OpenApiOperation operation)
   {
     var content = operation.RequestBody?.Content?.FirstOrDefault().Value;
-    var schema = (OpenApiSchema?)content?.Schema;
+    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
     if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {
@@ -436,7 +441,7 @@ public class OpenApiAnalyzer
 
     var response = successResponse?.Value;
     var content = response?.Content?.FirstOrDefault().Value;
-    var schema = (OpenApiSchema?)content?.Schema;
+    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
     if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {
@@ -454,7 +459,7 @@ public class OpenApiAnalyzer
     // Handle wrapped responses like {data: Client[], meta: {}}
     if (schema?.Properties?.ContainsKey("data") == true)
     {
-      var dataSchema = (OpenApiSchema)schema.Properties["data"];
+      var dataSchema = schema.Properties["data"].ResolveSchema();
       if (dataSchema.IsType(JsonSchemaType.Array) && dataSchema.Items != null && !string.IsNullOrEmpty(dataSchema.Items.Id))
       {
         // Normalize the type name for array items
@@ -512,14 +517,15 @@ public class OpenApiAnalyzer
 
     // Sample a few responses to detect patterns
     var responses = document.Paths
-      .SelectMany(p => p.Value.Operations)
-      .SelectMany(o => o.Value.Responses)
+      .SelectMany(p => p.Value?.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
+      .SelectMany(o => o.Value.Responses ?? new OpenApiResponses())
       .Where(r => r.Key.StartsWith("2"))
       .Take(10); // Increased sample size for better analysis
 
     foreach (var response in responses)
     {
-      var schema = (OpenApiSchema?)response.Value.Content?.FirstOrDefault().Value?.Schema;
+      var rawSchema = response.Value.Content?.FirstOrDefault().Value?.Schema;
+      var schema = rawSchema != null ? rawSchema.ResolveSchema() : null;
       if (schema?.Properties?.ContainsKey("data") == true)
       {
         pattern.IsWrapped = true;
@@ -530,7 +536,7 @@ public class OpenApiAnalyzer
           pattern.MetaProperty = "meta";
 
           // Analyze the meta object properties with proper $ref resolution
-          var metaSchema = (OpenApiSchema)schema.Properties["meta"];
+          var metaSchema = schema.Properties["meta"].ResolveSchema();
           AnalyzeMetaSchema(metaSchema, pattern, document);
         }
       }
@@ -551,7 +557,7 @@ public class OpenApiAnalyzer
     {
       foreach (var metaProp in resolvedSchema.Properties)
       {
-        string propType = GetSchemaTypeWithRef((OpenApiSchema)metaProp.Value, document);
+        string propType = GetSchemaTypeWithRef(metaProp.Value.ResolveSchema(), document);
         pattern.MetaProperties[metaProp.Key] = propType;
       }
     }
@@ -565,7 +571,7 @@ public class OpenApiAnalyzer
       string? schemaName = schema.Id;
       if (document.Components?.Schemas?.ContainsKey(schemaName) == true)
       {
-        return (OpenApiSchema)document.Components.Schemas[schemaName];
+        return document.Components.Schemas[schemaName].ResolveSchema();
       }
     }
 
@@ -595,14 +601,14 @@ public class OpenApiAnalyzer
         string schemaName = metaProp.Value;
         if (document.Components?.Schemas?.ContainsKey(schemaName) == true)
         {
-          var schema = (OpenApiSchema)document.Components.Schemas[schemaName];
+          var schema = document.Components.Schemas[schemaName].ResolveSchema();
           Dictionary<string, string> properties = new();
 
           if (schema.Properties != null)
           {
             foreach (var prop in schema.Properties)
             {
-              properties[prop.Key] = GetSchemaTypeWithRef((OpenApiSchema)prop.Value, document);
+              properties[prop.Key] = GetSchemaTypeWithRef(prop.Value.ResolveSchema(), document);
             }
           }
 
@@ -639,16 +645,20 @@ public class OpenApiAnalyzer
 
     // Look for common pagination/filtering parameters
     var allParams = document.Paths
-      .SelectMany(p => p.Value.Operations)
+      .SelectMany(p => p.Value?.Operations ?? Enumerable.Empty<KeyValuePair<HttpMethod, OpenApiOperation>>())
       .SelectMany(o => o.Value.Parameters ?? (IList<IOpenApiParameter>)new List<IOpenApiParameter>())
       .ToList();
 
-    List<string> allParamNames = allParams.Select(p => p.Name.ToLowerInvariant()).Distinct().ToList();
+    List<string> allParamNames = allParams
+      .Where(p => p.Name != null)
+      .Select(p => p.Name!.ToLowerInvariant())
+      .Distinct()
+      .ToList();
 
     // Collect actual pagination parameter names
     List<string> paginationParams = allParams
-      .Where(p => IsPaginationParameter(p.Name))
-      .Select(p => p.Name)
+      .Where(p => p.Name != null && IsPaginationParameter(p.Name))
+      .Select(p => p.Name!)
       .Distinct()
       .ToList();
 
