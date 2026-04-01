@@ -36,7 +36,7 @@ jobs:
             echo "DISPATCH_TOKEN not set, skipping client notifications"
             exit 0
           fi
-          for repo in invoiceninja keycloak paperless-ngx vikunja immich; do
+          for repo in invoiceninja keycloak paperless-ngx vikunja immich vaultwarden degiro-unofficial; do
             echo "Notifying apigen-dotnet/$repo..."
             gh api repos/apigen-dotnet/$repo/dispatches \
               -f event_type=generator-release \
