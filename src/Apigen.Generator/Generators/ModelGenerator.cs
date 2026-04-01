@@ -883,7 +883,9 @@ public class ModelGenerator
         }
         else
         {
-          enumValueName = enumValue?.ToString() ?? $"Value{i}";
+          // Use underscore prefix for numeric-only names (e.g., "_1", "_2")
+          string rawValue = enumValue?.ToString() ?? i.ToString();
+          enumValueName = $"_{rawValue}";
         }
 
         // Get the integer value
@@ -925,7 +927,9 @@ public class ModelGenerator
         cleanEnumName = Regex.Replace(cleanEnumName, @"[^a-zA-Z0-9_]", "_");
         if (char.IsDigit(cleanEnumName[0]))
         {
-          cleanEnumName = "_" + cleanEnumName;
+          // For pure numeric names, use underscore prefix (_1, _2)
+          // instead of letting PascalCase add a word prefix (Type1, Type2)
+          cleanEnumName = "_" + Regex.Replace(enumValueName, @"[^a-zA-Z0-9_]", "_");
         }
 
         // Add JsonStringEnumMemberName attribute if enabled and we have a string enum
