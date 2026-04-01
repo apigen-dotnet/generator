@@ -25,6 +25,9 @@ public static class OpenApiSpecMerger
     if (docs.Count == 1)
       return docs[0];
 
+    var components = new OpenApiComponents();
+    components.Schemas = new Dictionary<string, IOpenApiSchema>();
+    components.SecuritySchemes = new Dictionary<string, IOpenApiSecurityScheme>();
     var merged = new OpenApiDocument
     {
       Info = new OpenApiInfo
@@ -33,7 +36,7 @@ public static class OpenApiSpecMerger
         Version = docs[0].Info.Version,
       },
       Paths = new OpenApiPaths(),
-      Components = new OpenApiComponents(),
+      Components = components,
     };
 
     // Track schema origins for conflict resolution

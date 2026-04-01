@@ -1,4 +1,4 @@
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 using Apigen.Generator;
 
 public class OrderedPatchB : ISpecPatch

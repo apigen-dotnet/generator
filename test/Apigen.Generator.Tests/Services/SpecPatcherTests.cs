@@ -1,5 +1,5 @@
 using Apigen.Generator.Services;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 namespace Apigen.Generator.Tests.Services;
 
