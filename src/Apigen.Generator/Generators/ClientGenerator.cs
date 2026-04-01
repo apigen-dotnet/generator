@@ -1887,7 +1887,7 @@ public class ClientGenerator
         : authScheme.Name.ToDotNetCamelCase() ?? "apiKey";
 
       sb.AppendLine($"{indent}/// <summary>");
-      sb.AppendLine($"{indent}/// Create client with {authScheme.HeaderName} authentication");
+      sb.AppendLine($"{indent}/// Create client with API key authentication");
       sb.AppendLine($"{indent}/// </summary>");
       sb.AppendLine($"{indent}public static {_options.ClientClassName} {methodName}(string {paramName}, string baseUrl = \"{analysis.BaseUrl}\"{loggerParam})");
       sb.AppendLine($"{indent}{{");
