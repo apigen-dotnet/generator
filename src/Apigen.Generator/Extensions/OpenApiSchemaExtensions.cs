@@ -15,9 +15,30 @@ internal static class OpenApiSchemaExtensions
         if (schema is OpenApiSchema concrete)
             return concrete;
         if (schema is OpenApiSchemaReference reference)
-            return reference.RecursiveTarget ?? throw new InvalidOperationException($"Unresolved schema reference: {reference.Id}");
+            return reference.RecursiveTarget ?? throw new InvalidOperationException($"Unresolved schema reference: {reference.Reference?.Id ?? "(unknown)"}");
         // Fallback: should not happen, but cast will give a clear error
         return (OpenApiSchema)schema;
+    }
+
+    /// <summary>
+    /// Gets the schema reference name from an IOpenApiSchema.
+    /// In Microsoft.OpenApi 3.x, $ref schemas are represented as OpenApiSchemaReference.
+    /// The reference target name is stored in Reference.Id (NOT in the top-level Id property,
+    /// which is empty for references loaded from JSON/YAML specs).
+    /// 
+    /// This method checks:
+    /// 1. OpenApiSchemaReference.Reference.Id — the $ref target name (e.g., "UserResponseDto")
+    /// 2. Falls back to IOpenApiSchema.Id if set (for programmatically constructed schemas)
+    /// 
+    /// Returns null if the schema is not a reference to a named schema.
+    /// </summary>
+    public static string? GetSchemaReferenceName(this IOpenApiSchema? schema)
+    {
+        if (schema is OpenApiSchemaReference reference)
+            return reference.Reference?.Id;
+        if (schema is OpenApiSchema concrete && !string.IsNullOrEmpty(concrete.Id))
+            return concrete.Id;
+        return null;
     }
 
     /// <summary>

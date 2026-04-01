@@ -102,16 +102,30 @@ public class TypeMapper
 
     if (schema.IsType(JsonSchemaType.Array))
     {
-      string itemType = schema.Items != null
-        ? MapOpenApiTypeToClr(schema.Items.ResolveSchema(), useNullable)
-        : "object";
-      return $"List<{itemType}>?";
+      if (schema.Items != null)
+      {
+        // Check for $ref on array items BEFORE resolving
+        string? itemRefName = schema.Items.GetSchemaReferenceName();
+        if (!string.IsNullOrEmpty(itemRefName))
+        {
+          return $"List<{GetClassName(itemRefName)}>?";
+        }
+        string itemType = MapOpenApiTypeToClr(schema.Items.ResolveSchema(), useNullable);
+        return $"List<{itemType}>?";
+      }
+      return "List<object>?";
     }
 
     if (schema.IsType(JsonSchemaType.Object) || schema.Properties?.Count > 0)
     {
       if (schema.AdditionalProperties != null)
       {
+        // Check for $ref on additional properties BEFORE resolving
+        string? addPropRefName = schema.AdditionalProperties.GetSchemaReferenceName();
+        if (!string.IsNullOrEmpty(addPropRefName))
+        {
+          return $"Dictionary<string, {GetClassName(addPropRefName)}>?";
+        }
         string valueType = MapOpenApiTypeToClr(schema.AdditionalProperties.ResolveSchema(), useNullable);
         return $"Dictionary<string, {valueType}>?";
       }

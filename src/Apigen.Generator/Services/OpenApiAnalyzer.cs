@@ -376,13 +376,15 @@ public class OpenApiAnalyzer
   private string? GetRequestBodyType(OpenApiOperation operation)
   {
     var content = operation.RequestBody?.Content?.FirstOrDefault().Value;
-    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
-    if (schema != null && !string.IsNullOrEmpty(schema.Id))
+    // Check for $ref BEFORE resolving — Reference.Id has the schema name
+    string? refName = content?.Schema?.GetSchemaReferenceName();
+    if (!string.IsNullOrEmpty(refName))
     {
-      // Normalize the type name to match how model classes are generated
-      return _typeMapper.GetClassName(schema.Id);
+      return _typeMapper.GetClassName(refName);
     }
+
+    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
     // Handle inline schemas (generate request models from inline body schemas)
     if (schema?.Properties != null && schema.Properties.Any())
@@ -441,36 +443,46 @@ public class OpenApiAnalyzer
 
     var response = successResponse?.Value;
     var content = response?.Content?.FirstOrDefault().Value;
-    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
-    if (schema != null && !string.IsNullOrEmpty(schema.Id))
+    // Check for $ref BEFORE resolving - Reference.Id has the schema name
+    string? refName = content?.Schema?.GetSchemaReferenceName();
+    if (!string.IsNullOrEmpty(refName))
     {
-      // Normalize the type name to match how model classes are generated
-      return _typeMapper.GetClassName(schema.Id);
+      return _typeMapper.GetClassName(refName);
     }
 
+    var schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
+
     // Handle direct array responses (e.g., array of TasksView without wrapper)
-    if (schema != null && schema.IsType(JsonSchemaType.Array) && schema.Items != null && !string.IsNullOrEmpty(schema.Items.Id))
+    if (schema != null && schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = _typeMapper.GetClassName(schema.Items.Id);
-      return $"List<{itemType}>";
+      string? itemRefName = schema.Items.GetSchemaReferenceName();
+      if (!string.IsNullOrEmpty(itemRefName))
+      {
+        string itemType = _typeMapper.GetClassName(itemRefName);
+        return $"List<{itemType}>";
+      }
     }
 
     // Handle wrapped responses like {data: Client[], meta: {}}
     if (schema?.Properties?.ContainsKey("data") == true)
     {
-      var dataSchema = schema.Properties["data"].ResolveSchema();
-      if (dataSchema.IsType(JsonSchemaType.Array) && dataSchema.Items != null && !string.IsNullOrEmpty(dataSchema.Items.Id))
+      var dataISchema = schema.Properties["data"];
+      var dataSchema = dataISchema.ResolveSchema();
+      if (dataSchema.IsType(JsonSchemaType.Array) && dataSchema.Items != null)
       {
-        // Normalize the type name for array items
-        string itemType = _typeMapper.GetClassName(dataSchema.Items.Id);
-        return $"{itemType}[]";
+        string? dataItemRefName = dataSchema.Items.GetSchemaReferenceName();
+        if (!string.IsNullOrEmpty(dataItemRefName))
+        {
+          string itemType = _typeMapper.GetClassName(dataItemRefName);
+          return $"{itemType}[]";
+        }
       }
 
-      if (!string.IsNullOrEmpty(dataSchema.Id))
+      string? dataRefName = dataISchema.GetSchemaReferenceName();
+      if (!string.IsNullOrEmpty(dataRefName))
       {
-        // Normalize the type name for data property
-        return _typeMapper.GetClassName(dataSchema.Id);
+        return _typeMapper.GetClassName(dataRefName);
       }
     }
 
@@ -557,7 +569,8 @@ public class OpenApiAnalyzer
     {
       foreach (var metaProp in resolvedSchema.Properties)
       {
-        string propType = GetSchemaTypeWithRef(metaProp.Value.ResolveSchema(), document);
+        // Use IOpenApiSchema overload to check $ref before resolution
+        string propType = GetSchemaTypeWithRef(metaProp.Value, document);
         pattern.MetaProperties[metaProp.Key] = propType;
       }
     }
@@ -565,14 +578,12 @@ public class OpenApiAnalyzer
 
   private OpenApiSchema? ResolveSchemaReference(OpenApiSchema schema, OpenApiDocument document)
   {
-    if (!string.IsNullOrEmpty(schema.Id))
+    // In OpenApi 3.x, schema.Id may be empty even for resolved references.
+    // This method is only called on already-resolved schemas, so check Id as fallback.
+    string? schemaName = schema.Id;
+    if (!string.IsNullOrEmpty(schemaName) && document.Components?.Schemas?.ContainsKey(schemaName) == true)
     {
-      // Extract schema name from reference like "#/components/schemas/Meta"
-      string? schemaName = schema.Id;
-      if (document.Components?.Schemas?.ContainsKey(schemaName) == true)
-      {
-        return document.Components.Schemas[schemaName].ResolveSchema();
-      }
+      return document.Components.Schemas[schemaName].ResolveSchema();
     }
 
     return schema;
@@ -583,12 +594,23 @@ public class OpenApiAnalyzer
     // Handle $ref references
     if (!string.IsNullOrEmpty(schema.Id))
     {
-      string? schemaName = schema.Id;
-      // For nested objects, return the schema name as the type
-      return schemaName;
+      return schema.Id;
     }
 
     return GetSchemaType(schema);
+  }
+
+  /// <summary>
+  /// Overload that accepts IOpenApiSchema to check for $ref before resolution
+  /// </summary>
+  private string GetSchemaTypeWithRef(IOpenApiSchema iSchema, OpenApiDocument document)
+  {
+    string? refName = iSchema.GetSchemaReferenceName();
+    if (!string.IsNullOrEmpty(refName))
+    {
+      return refName;
+    }
+    return GetSchemaTypeWithRef(iSchema.ResolveSchema(), document);
   }
 
   private void CollectReferencedSchemas(ResponsePattern pattern, OpenApiDocument document)
@@ -608,7 +630,8 @@ public class OpenApiAnalyzer
           {
             foreach (var prop in schema.Properties)
             {
-              properties[prop.Key] = GetSchemaTypeWithRef(prop.Value.ResolveSchema(), document);
+              // Use IOpenApiSchema overload to check $ref before resolution
+              properties[prop.Key] = GetSchemaTypeWithRef(prop.Value, document);
             }
           }
 

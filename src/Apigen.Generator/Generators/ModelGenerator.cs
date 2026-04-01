@@ -351,7 +351,8 @@ public class ModelGenerator
     sb.AppendLine("{");
 
     // Merge properties from allOf schemas
-    Dictionary<string, OpenApiSchema> mergedProperties = new();
+    // Store the original IOpenApiSchema to preserve $ref information for type resolution
+    Dictionary<string, IOpenApiSchema> mergedProperties = new();
     HashSet<string> mergedRequired = new();
 
     // First, collect properties from allOf schemas
@@ -361,12 +362,12 @@ public class ModelGenerator
       {
         OpenApiSchema resolvedSchema = ResolveSchemaReference(allOfSchema.ResolveSchema());
 
-        // Merge properties
+        // Merge properties (preserve original IOpenApiSchema for $ref resolution)
         if (resolvedSchema.Properties != null)
         {
           foreach (var prop in resolvedSchema.Properties)
           {
-            mergedProperties[prop.Key] = prop.Value.ResolveSchema();
+            mergedProperties[prop.Key] = prop.Value;
           }
         }
 
@@ -386,7 +387,7 @@ public class ModelGenerator
     {
       foreach (var prop in schema.Properties)
       {
-        mergedProperties[prop.Key] = prop.Value.ResolveSchema();
+        mergedProperties[prop.Key] = prop.Value;
       }
     }
 
@@ -403,7 +404,7 @@ public class ModelGenerator
     if (mergedProperties.Count > 0)
     {
       bool isFirst = true;
-      foreach (KeyValuePair<string, OpenApiSchema> property in mergedProperties)
+      foreach (KeyValuePair<string, IOpenApiSchema> property in mergedProperties)
       {
         if (!isFirst)
         {
@@ -433,10 +434,13 @@ public class ModelGenerator
   private void GenerateProperty(
     StringBuilder sb,
     string propertyName,
-    OpenApiSchema propertySchema,
+    IOpenApiSchema propertyISchema,
     bool isRequired,
     string originalSchemaName)
   {
+    // Resolve to concrete schema for attribute/validation access
+    OpenApiSchema propertySchema = propertyISchema.ResolveSchema();
+
     string propertyNameClean = _typeMapper.GetPropertyName(propertyName);
     // Get the transformed class name for conflict checking
     string className = _typeMapper.GetClassName(originalSchemaName);
@@ -462,7 +466,8 @@ public class ModelGenerator
     }
     else
     {
-      propertyType = propertyOverride?.TargetType ?? GetPropertyType(propertySchema, isRequired, propertyName);
+      // Use GetPropertyTypeFromISchema to preserve $ref information
+      propertyType = propertyOverride?.TargetType ?? GetPropertyTypeFromISchema(propertyISchema, isRequired, propertyName);
     }
 
     string indent = _formatting.GetIndentation();
@@ -690,6 +695,31 @@ public class ModelGenerator
     return string.Join("\n", sanitizedLines);
   }
 
+  /// <summary>
+  /// Gets the C# type for a property schema.
+  /// This overload accepts the original IOpenApiSchema to correctly extract $ref names
+  /// before resolution, since OpenApiSchemaReference.Reference.Id contains the target name
+  /// but this information is lost after calling ResolveSchema().
+  /// </summary>
+  private string GetPropertyTypeFromISchema(IOpenApiSchema iSchema, bool isRequired, string originalPropertyName = "")
+  {
+    // Check for $ref BEFORE resolving - this is the key to preserving reference names
+    string? refName = iSchema.GetSchemaReferenceName();
+    if (!string.IsNullOrEmpty(refName))
+    {
+      bool isArrayProperty = originalPropertyName.Contains("[]");
+      string className = _typeMapper.GetClassName(refName);
+      if (isArrayProperty)
+      {
+        return $"{className}[]?";
+      }
+      return className + (_options.GenerateNullableReferenceTypes && !isRequired ? "?" : "");
+    }
+
+    // Not a direct $ref - resolve and delegate to the schema-based method
+    return GetPropertyType(iSchema.ResolveSchema(), isRequired, originalPropertyName);
+  }
+
   private string GetPropertyType(OpenApiSchema schema, bool isRequired, string originalPropertyName = "")
   {
     // Check if the property name contains [] indicating it's an array
@@ -698,6 +728,17 @@ public class ModelGenerator
     // Handle allOf - if there's a single $ref in allOf, resolve it
     if (schema.AllOf != null && schema.AllOf.Count == 1)
     {
+      // Check for $ref in the allOf entry BEFORE resolving
+      string? allOfRefName = schema.AllOf[0].GetSchemaReferenceName();
+      if (!string.IsNullOrEmpty(allOfRefName))
+      {
+        string className = _typeMapper.GetClassName(allOfRefName);
+        if (isArrayProperty)
+        {
+          return $"{className}[]?";
+        }
+        return className + (_options.GenerateNullableReferenceTypes && !isRequired ? "?" : "");
+      }
       OpenApiSchema resolvedSchema = ResolveSchemaReference(schema.AllOf[0].ResolveSchema());
       return GetPropertyType(resolvedSchema, isRequired, originalPropertyName);
     }
@@ -719,7 +760,7 @@ public class ModelGenerator
     // Handle array properties with [] in name - take precedence over OpenAPI array type
     if (isArrayProperty && schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyType(schema.Items.ResolveSchema(), true);
+      string itemType = GetPropertyTypeFromISchema(schema.Items, true);
       // Remove List<> wrapper and any nullable modifiers, then make it a C# array
       if (itemType.StartsWith("List<") && itemType.EndsWith(">?"))
       {
@@ -740,13 +781,13 @@ public class ModelGenerator
 
     if (schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyType(schema.Items.ResolveSchema(), true);
+      string itemType = GetPropertyTypeFromISchema(schema.Items, true);
       return $"List<{itemType}>?";
     }
 
     if (schema.IsType(JsonSchemaType.Object) && schema.AdditionalProperties != null)
     {
-      string valueType = GetPropertyType(schema.AdditionalProperties.ResolveSchema(), true);
+      string valueType = GetPropertyTypeFromISchema(schema.AdditionalProperties, true);
       return $"Dictionary<string, {valueType}>?";
     }
 

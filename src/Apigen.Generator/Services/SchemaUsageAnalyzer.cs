@@ -1,3 +1,4 @@
+using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
 using Microsoft.OpenApi;
 
@@ -195,12 +196,7 @@ public class SchemaUsageAnalyzer
 
   private string? GetSchemaName(IOpenApiSchema? schema)
   {
-    if (schema != null && !string.IsNullOrEmpty(schema.Id))
-    {
-      return schema.Id;
-    }
-
-    return null;
+    return schema?.GetSchemaReferenceName();
   }
 
   /// <summary>
