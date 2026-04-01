@@ -122,6 +122,9 @@ public class SpecPatcher
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Linq.dll")));
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "netstandard.dll")));
 
+    // System.Net.Http is needed because OpenApi 3.x uses HttpMethod as key in Operations dictionary
+    references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Net.Http.dll")));
+
     return references;
   }
 }

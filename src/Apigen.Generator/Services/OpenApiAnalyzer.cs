@@ -1,5 +1,6 @@
 using System.Net.Http;
 using Microsoft.OpenApi;
+using StringCasing;
 using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
 using System.Text.RegularExpressions;
@@ -190,7 +191,7 @@ public class OpenApiAnalyzer
         {
           Method = operation.Key.Method.ToUpperInvariant(),
           Path = path.Key,
-          OperationId = operation.Value.OperationId ?? $"{operation.Key.Method}{tag}",
+          OperationId = operation.Value.OperationId ?? $"{operation.Key.Method.ToTitleCase()}{tag}",
           Summary = operation.Value.Summary ?? "",
           Type = DetermineOperationType(operation.Key, path.Key, tag),
           Parameters = AnalyzeParameters(operation.Value, path.Key, pathItem),
@@ -700,4 +701,5 @@ public class OpenApiAnalyzer
            lower == "offset" || lower == "size" || lower == "page_size" ||
            lower == "pagesize" || lower == "perpage";
   }
+
 }

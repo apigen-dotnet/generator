@@ -963,11 +963,17 @@ public class ModelGenerator
         if (requestBody?.Content != null)
         {
           var content = requestBody.Content.FirstOrDefault().Value;
-          OpenApiSchema? schema = content?.Schema != null ? content.Schema.ResolveSchema() : null;
 
-          // Only process inline schemas (not references)
-          // A $ref schema has an Id set even after resolution, so check that
-          if (string.IsNullOrEmpty(schema?.Id) && schema?.Properties != null && schema.Properties.Any())
+          // Skip $ref schemas — they're already generated from components.schemas.
+          // Must check BEFORE resolving, because in OpenApi 3.x, the reference
+          // target name is lost after ResolveSchema() (Id becomes null).
+          if (content?.Schema?.GetSchemaReferenceName() != null)
+            continue;
+
+          OpenApiSchema? schema = content?.Schema?.ResolveSchema();
+
+          // Only process inline schemas that have properties
+          if (schema?.Properties != null && schema.Properties.Any())
           {
             string? operationId = operation.Value.OperationId;
             if (!string.IsNullOrEmpty(operationId))
