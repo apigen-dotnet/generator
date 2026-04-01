@@ -1874,11 +1874,15 @@ public class ClientGenerator
     }
     else
     {
-      // Use scheme name to generate unique factory method name when multiple API key schemes exist
-      string methodName = string.IsNullOrEmpty(authScheme.Name)
+      // Count how many non-cookie, non-bearer API key schemes exist to detect duplicates
+      int apiKeySchemeCount = analysis.AuthenticationSchemes
+        .Count(s => s.Type == AuthSchemeType.ApiKey && s.In != AuthSchemeLocation.Cookie);
+
+      // Use scheme name for unique factory method names only when multiple API key schemes exist
+      string methodName = apiKeySchemeCount <= 1
         ? "WithApiKey"
         : $"With{authScheme.Name.ToDotNetPascalCase()}";
-      string paramName = string.IsNullOrEmpty(authScheme.Name)
+      string paramName = apiKeySchemeCount <= 1
         ? "apiKey"
         : authScheme.Name.ToDotNetCamelCase() ?? "apiKey";
 
