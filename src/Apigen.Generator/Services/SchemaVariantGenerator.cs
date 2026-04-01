@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Apigen.Generator.Models;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
+using Apigen.Generator.Extensions;
 
 namespace Apigen.Generator.Services;
 
@@ -33,9 +35,9 @@ public class SchemaVariantGenerator
       return _variants;
     }
 
-    foreach (KeyValuePair<string, OpenApiSchema> schemaEntry in _document.Components.Schemas)
+    foreach (var schemaEntry in _document.Components.Schemas)
     {
-      GenerateVariantsForSchema(schemaEntry.Key, schemaEntry.Value);
+      GenerateVariantsForSchema(schemaEntry.Key, (OpenApiSchema)schemaEntry.Value);
     }
 
     return _variants;
@@ -79,14 +81,14 @@ public class SchemaVariantGenerator
     // Filter out readOnly properties
     if (schema.Properties != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
+      foreach (var property in schema.Properties)
       {
         if (!property.Value.ReadOnly)
         {
-          variant.Properties[property.Key] = property.Value;
+          variant.Properties[property.Key] = (OpenApiSchema)property.Value;
 
           // Track nested references
-          string? refSchema = GetSchemaName(property.Value);
+          string? refSchema = GetSchemaName((OpenApiSchema?)property.Value);
           if (refSchema != null)
           {
             variant.NestedReferences[property.Key] = refSchema;
@@ -125,14 +127,14 @@ public class SchemaVariantGenerator
     // Include all properties except writeOnly
     if (schema.Properties != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> property in schema.Properties)
+      foreach (var property in schema.Properties)
       {
         if (!property.Value.WriteOnly)
         {
-          variant.Properties[property.Key] = property.Value;
+          variant.Properties[property.Key] = (OpenApiSchema)property.Value;
 
           // Track nested references
-          string? refSchema = GetSchemaName(property.Value);
+          string? refSchema = GetSchemaName((OpenApiSchema?)property.Value);
           if (refSchema != null)
           {
             variant.NestedReferences[property.Key] = refSchema;
@@ -175,7 +177,7 @@ public class SchemaVariantGenerator
       sb.Append($"{propName}:");
       sb.Append($"{propSchema.Type}:");
       sb.Append($"{propSchema.Format}:");
-      sb.Append($"{propSchema.Nullable}:");
+      sb.Append($"{propSchema.IsNullable()}:");
       sb.Append($"{propSchema.ReadOnly}:");
       sb.Append($"{propSchema.WriteOnly}:");
       sb.Append($"{variant.Required.Contains(propName)}:");
@@ -216,9 +218,9 @@ public class SchemaVariantGenerator
       }
 
       // Handle arrays
-      if (propSchema.Type == "array" && propSchema.Items != null)
+      if (propSchema.IsType(JsonSchemaType.Array) && propSchema.Items != null)
       {
-        string? itemRef = GetSchemaName(propSchema.Items);
+        string? itemRef = GetSchemaName((OpenApiSchema?)propSchema.Items);
         if (itemRef != null)
         {
           sb.Append($"array:{itemRef}:");
@@ -245,30 +247,20 @@ public class SchemaVariantGenerator
   }
 
   /// <summary>
-  /// Serializes an IOpenApiAny value to a stable string for hashing.
+  /// Serializes a JsonNode value to a stable string for hashing.
   /// </summary>
-  private static string SerializeOpenApiAny(Microsoft.OpenApi.Any.IOpenApiAny? value)
+  private static string SerializeOpenApiAny(JsonNode? value)
   {
     if (value == null) return "";
 
-    return value switch
-    {
-      Microsoft.OpenApi.Any.OpenApiString s => $"str:{s.Value}",
-      Microsoft.OpenApi.Any.OpenApiInteger i => $"int:{i.Value}",
-      Microsoft.OpenApi.Any.OpenApiLong l => $"long:{l.Value}",
-      Microsoft.OpenApi.Any.OpenApiFloat f => $"float:{f.Value}",
-      Microsoft.OpenApi.Any.OpenApiDouble d => $"double:{d.Value}",
-      Microsoft.OpenApi.Any.OpenApiBoolean b => $"bool:{b.Value}",
-      Microsoft.OpenApi.Any.OpenApiNull => "null",
-      _ => value.GetType().Name
-    };
+    return value.ToJsonString();
   }
 
   private string? GetSchemaName(OpenApiSchema? schema)
   {
-    if (schema?.Reference?.Id != null)
+    if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {
-      return schema.Reference.Id;
+      return schema.Id;
     }
 
     return null;

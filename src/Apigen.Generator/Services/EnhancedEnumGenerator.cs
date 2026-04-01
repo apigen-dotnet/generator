@@ -1,9 +1,9 @@
 using System.Text.RegularExpressions;
 using System.Text;
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Any;
+using System.Text.Json.Nodes;
+using Microsoft.OpenApi;
 using Apigen.Generator.Models;
-using Microsoft.OpenApi.Interfaces;
+using Apigen.Generator.Extensions;
 using StringCasing;
 
 namespace Apigen.Generator.Services;
@@ -81,7 +81,7 @@ public class EnhancedEnumGenerator
   /// </summary>
   private EnumGenerationStrategy DetermineStrategy(OpenApiSchema schema)
   {
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     if (enumValues == null || !enumValues.Any())
     {
       return EnumGenerationStrategy.Fallback;
@@ -125,15 +125,16 @@ public class EnhancedEnumGenerator
   /// </summary>
   private void GenerateFromXEnumVarNames(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
   {
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     if (enumValues == null) return;
 
     List<string>? varNames = null;
     if (schema.Extensions.TryGetValue("x-enum-varnames", out IOpenApiExtension? varNamesExt) &&
-        varNamesExt is OpenApiArray varNamesArray)
+        varNamesExt is JsonNodeExtension varNamesJne &&
+        varNamesJne.Node is JsonArray varNamesArray)
     {
       varNames = varNamesArray
-        .Select(v => v is OpenApiString s ? s.Value : "")
+        .Select(v => v?.GetValue<string>() ?? "")
         .ToList();
     }
 
@@ -173,7 +174,7 @@ public class EnhancedEnumGenerator
   private void GenerateFromXEnumDescriptions(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
   {
     enumInfo.HasDescriptions = true;
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     Dictionary<string, string> descriptions = GetEnumDescriptions(schema);
 
     if (enumValues == null)
@@ -181,7 +182,7 @@ public class EnhancedEnumGenerator
       return;
     }
 
-    foreach (IOpenApiAny value in enumValues)
+    foreach (JsonNode? value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
       string description = descriptions.TryGetValue(rawValue, out string? desc) ? desc : rawValue;
@@ -225,13 +226,13 @@ public class EnhancedEnumGenerator
   /// </summary>
   private void GenerateFromPreservedValues(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
   {
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     if (enumValues == null)
     {
       return;
     }
 
-    foreach (IOpenApiAny value in enumValues)
+    foreach (JsonNode? value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
 
@@ -258,7 +259,7 @@ public class EnhancedEnumGenerator
   private void GenerateFromNumericWithContext(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
   {
     enumInfo.IsNumeric = true;
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     if (enumValues == null)
     {
       return;
@@ -267,7 +268,7 @@ public class EnhancedEnumGenerator
     // Try to infer context from enum name
     string context = InferContextFromName(enumInfo.Name);
 
-    foreach (IOpenApiAny value in enumValues)
+    foreach (JsonNode? value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
       if (int.TryParse(rawValue, out int numericValue))
@@ -289,13 +290,13 @@ public class EnhancedEnumGenerator
   /// </summary>
   private void GenerateFromFallback(EnhancedEnumInfo enumInfo, OpenApiSchema schema)
   {
-    List<IOpenApiAny>? enumValues = GetEnumValues(schema);
+    List<JsonNode?>? enumValues = GetEnumValues(schema);
     if (enumValues == null)
     {
       return;
     }
 
-    foreach (IOpenApiAny value in enumValues)
+    foreach (JsonNode? value in enumValues)
     {
       string rawValue = ExtractEnumValueString(value);
       // Check naming override BEFORE ToDotNetPascalCase
@@ -492,7 +493,7 @@ public class EnhancedEnumGenerator
   /// <summary>
   /// Gets enum values from OpenAPI schema
   /// </summary>
-  private List<IOpenApiAny>? GetEnumValues(OpenApiSchema schema)
+  private List<JsonNode?>? GetEnumValues(OpenApiSchema schema)
   {
     return schema.Enum?.ToList();
   }
@@ -505,13 +506,15 @@ public class EnhancedEnumGenerator
     Dictionary<string, string> result = new();
 
     if (schema.Extensions.TryGetValue("x-enumDescriptions", out IOpenApiExtension? extension) &&
-        extension is OpenApiObject obj)
+        extension is JsonNodeExtension jne &&
+        jne.Node is JsonObject obj)
     {
-      foreach (KeyValuePair<string, IOpenApiAny> kvp in obj)
+      foreach (KeyValuePair<string, JsonNode?> kvp in obj)
       {
-        if (kvp.Value is OpenApiString stringValue)
+        string? stringValue = kvp.Value?.GetValue<string>();
+        if (stringValue != null)
         {
-          result[kvp.Key] = stringValue.Value;
+          result[kvp.Key] = stringValue;
         }
       }
     }
@@ -522,7 +525,7 @@ public class EnhancedEnumGenerator
   /// <summary>
   /// Checks if enum values are already developer-friendly
   /// </summary>
-  private bool AreDeveloperFriendly(List<IOpenApiAny> values)
+  private bool AreDeveloperFriendly(List<JsonNode?> values)
   {
     return values.All(v =>
     {
@@ -573,17 +576,34 @@ public class EnhancedEnumGenerator
   }
 
   /// <summary>
-  /// Extracts the actual string value from an IOpenApiAny
+  /// Extracts the actual string value from a JsonNode
   /// </summary>
-  private string ExtractEnumValueString(IOpenApiAny enumValue)
+  private string ExtractEnumValueString(JsonNode? enumValue)
   {
-    return enumValue switch
+    if (enumValue == null) return "";
+
+    try
     {
-      OpenApiString stringValue => stringValue.Value,
-      OpenApiInteger intValue => intValue.Value.ToString(),
-      OpenApiDouble doubleValue => doubleValue.Value.ToString(),
-      OpenApiBoolean boolValue => boolValue.Value.ToString().ToLowerInvariant(),
-      _ => enumValue?.ToString() ?? "",
-    };
+      // Try to get as specific types
+      if (enumValue is JsonValue jsonValue)
+      {
+        if (jsonValue.TryGetValue<string>(out string? strVal))
+          return strVal;
+        if (jsonValue.TryGetValue<int>(out int intVal))
+          return intVal.ToString();
+        if (jsonValue.TryGetValue<long>(out long longVal))
+          return longVal.ToString();
+        if (jsonValue.TryGetValue<double>(out double dblVal))
+          return dblVal.ToString();
+        if (jsonValue.TryGetValue<bool>(out bool boolVal))
+          return boolVal.ToString().ToLowerInvariant();
+      }
+    }
+    catch
+    {
+      // Fall through to ToString
+    }
+
+    return enumValue.ToString() ?? "";
   }
 }

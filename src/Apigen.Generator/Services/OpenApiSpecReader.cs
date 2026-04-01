@@ -1,5 +1,5 @@
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Readers;
+using Microsoft.OpenApi;
+using Microsoft.OpenApi.Reader;
 
 namespace Apigen.Generator.Services;
 
@@ -22,17 +22,16 @@ public class OpenApiSpecReader
 
     using (stream)
     {
-      OpenApiStreamReader reader = new();
-      ReadResult? result = await reader.ReadAsync(stream);
+      var result = await OpenApiDocument.LoadAsync(stream);
 
-      OpenApiDiagnostic? diagnostic = result.OpenApiDiagnostic;
+      OpenApiDiagnostic? diagnostic = result.Diagnostic;
       if (diagnostic?.Errors?.Count > 0)
       {
         string errors = string.Join("\n", diagnostic.Errors.Select(e => e.Message));
         throw new InvalidOperationException($"Failed to parse OpenAPI specification:\n{errors}");
       }
 
-      return result.OpenApiDocument;
+      return result.Document;
     }
   }
 

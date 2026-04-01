@@ -1,7 +1,7 @@
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 namespace Apigen.Generator.Services;
 

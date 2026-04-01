@@ -1,7 +1,8 @@
-using Microsoft.OpenApi.Models;
+using System.Net.Http;
+using Microsoft.OpenApi;
+using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
 using System.Text.RegularExpressions;
-using OperationType = Microsoft.OpenApi.Models.OperationType;
 
 namespace Apigen.Generator.Services;
 
@@ -49,14 +50,14 @@ public class OpenApiAnalyzer
 
     if (document.Components?.SecuritySchemes?.Any() == true)
     {
-      foreach (KeyValuePair<string, OpenApiSecurityScheme> schemePair in document.Components.SecuritySchemes)
+      foreach (var schemePair in document.Components.SecuritySchemes)
       {
         AuthenticationScheme auth = new()
         {
           Name = schemePair.Key,
         };
 
-        OpenApiSecurityScheme scheme = schemePair.Value;
+        var scheme = (OpenApiSecurityScheme)schemePair.Value;
 
         if (scheme.Type == SecuritySchemeType.ApiKey)
         {
@@ -111,22 +112,22 @@ public class OpenApiAnalyzer
     if (document.Components?.SecuritySchemes?.Any() == true)
     {
       // Try to find an ApiKey or HTTP Bearer scheme
-      KeyValuePair<string, OpenApiSecurityScheme>? apiKeyScheme = document.Components.SecuritySchemes
-        .FirstOrDefault(s => s.Value.Type == SecuritySchemeType.ApiKey);
+      var apiKeyScheme = document.Components.SecuritySchemes
+        .FirstOrDefault(s => ((OpenApiSecurityScheme)s.Value).Type == SecuritySchemeType.ApiKey);
 
-      KeyValuePair<string, OpenApiSecurityScheme>? httpScheme = document.Components.SecuritySchemes
-        .FirstOrDefault(s => s.Value.Type == SecuritySchemeType.Http && string.Equals(s.Value.Scheme, "bearer", StringComparison.OrdinalIgnoreCase));
+      var httpScheme = document.Components.SecuritySchemes
+        .FirstOrDefault(s => ((OpenApiSecurityScheme)s.Value).Type == SecuritySchemeType.Http && string.Equals(((OpenApiSecurityScheme)s.Value).Scheme, "bearer", StringComparison.OrdinalIgnoreCase));
 
       // Prefer ApiKey schemes
-      if (apiKeyScheme != null && apiKeyScheme.Value.Value != null)
+      if (apiKeyScheme.Value != null)
       {
-        OpenApiSecurityScheme scheme = apiKeyScheme.Value.Value;
+        var scheme = (OpenApiSecurityScheme)apiKeyScheme.Value;
         auth.Type = AuthSchemeType.ApiKey;
         auth.In = AuthSchemeLocation.Header;
         auth.HeaderName = scheme.Name;
       }
       // Fall back to HTTP Bearer
-      else if (httpScheme != null && httpScheme.Value.Value != null)
+      else if (httpScheme.Value != null)
       {
         auth.Type = AuthSchemeType.Http;
         auth.In = AuthSchemeLocation.Header;
@@ -136,7 +137,7 @@ public class OpenApiAnalyzer
       // Fall back to first scheme
       else
       {
-        OpenApiSecurityScheme scheme = document.Components.SecuritySchemes.First().Value;
+        var scheme = (OpenApiSecurityScheme)document.Components.SecuritySchemes.First().Value;
 
         if (scheme.Type == SecuritySchemeType.ApiKey)
         {
@@ -161,9 +162,9 @@ public class OpenApiAnalyzer
   {
     Dictionary<string, ResourceOperation> resources = new();
 
-    foreach (KeyValuePair<string, OpenApiPathItem> path in document.Paths)
+    foreach (var path in document.Paths)
     {
-      foreach (KeyValuePair<OperationType, OpenApiOperation> operation in path.Value.Operations)
+      foreach (var operation in path.Value.Operations)
       {
         string? tag = operation.Value.Tags?.FirstOrDefault()?.Name;
         if (string.IsNullOrEmpty(tag))
@@ -184,12 +185,12 @@ public class OpenApiAnalyzer
 
         ApiOperation apiOperation = new()
         {
-          Method = operation.Key.ToString().ToUpperInvariant(),
+          Method = operation.Key.Method.ToUpperInvariant(),
           Path = path.Key,
-          OperationId = operation.Value.OperationId ?? $"{operation.Key}{tag}",
+          OperationId = operation.Value.OperationId ?? $"{operation.Key.Method}{tag}",
           Summary = operation.Value.Summary ?? "",
           Type = DetermineOperationType(operation.Key, path.Key, tag),
-          Parameters = AnalyzeParameters(operation.Value, path.Key, path.Value),
+          Parameters = AnalyzeParameters(operation.Value, path.Key, (OpenApiPathItem)path.Value),
           RequestBodyType = GetRequestBodyType(operation.Value),
           RequestContentType = GetRequestContentType(operation.Value),
           ResponseType = GetResponseType(operation.Value),
@@ -235,23 +236,19 @@ public class OpenApiAnalyzer
   }
 
   private Models.OperationType DetermineOperationType(
-    OperationType method,
+    HttpMethod method,
     string path,
     string resource)
   {
     string cleanPath = path.ToLowerInvariant();
 
-    return method switch
-    {
-      OperationType.Get when IsListEndpoint(cleanPath, resource) => Models.OperationType.List,
-      OperationType.Get when IsGetByIdEndpoint(cleanPath) => Models.OperationType.GetById,
-      OperationType.Post when IsBulkEndpoint(cleanPath) => Models.OperationType.Bulk,
-      OperationType.Post when IsCreateEndpoint(cleanPath, resource) => Models.OperationType
-        .Create,
-      OperationType.Put when IsGetByIdEndpoint(cleanPath) => Models.OperationType.Update,
-      OperationType.Delete when IsGetByIdEndpoint(cleanPath) => Models.OperationType.Delete,
-      _ => Models.OperationType.Custom,
-    };
+    if (method == HttpMethod.Get && IsListEndpoint(cleanPath, resource)) return Models.OperationType.List;
+    if (method == HttpMethod.Get && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.GetById;
+    if (method == HttpMethod.Post && IsBulkEndpoint(cleanPath)) return Models.OperationType.Bulk;
+    if (method == HttpMethod.Post && IsCreateEndpoint(cleanPath, resource)) return Models.OperationType.Create;
+    if (method == HttpMethod.Put && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.Update;
+    if (method == HttpMethod.Delete && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.Delete;
+    return Models.OperationType.Custom;
   }
 
   private bool IsListEndpoint(string path, string resource)
@@ -289,13 +286,13 @@ public class OpenApiAnalyzer
     // Add operation-level parameters
     if (operation.Parameters != null)
     {
-      foreach (OpenApiParameter? param in operation.Parameters)
+      foreach (var param in operation.Parameters)
       {
         parameters.Add(
           new ApiParameter
           {
             Name = param.Name,
-            Type = GetParameterType(param.Schema),
+            Type = GetParameterType((OpenApiSchema?)param.Schema),
             Location = param.In?.ToString().ToLowerInvariant() ?? "query",
             Required = param.Required,
             Description = param.Description,
@@ -312,7 +309,7 @@ public class OpenApiAnalyzer
     // Add path-level parameters
     if (pathItem.Parameters != null)
     {
-      foreach (OpenApiParameter? param in pathItem.Parameters)
+      foreach (var param in pathItem.Parameters)
       {
         // Check if not already added by operation
         if (!parameters.Any(p => p.Name == param.Name))
@@ -321,7 +318,7 @@ public class OpenApiAnalyzer
             new ApiParameter
             {
               Name = param.Name,
-              Type = GetParameterType(param.Schema),
+              Type = GetParameterType((OpenApiSchema?)param.Schema),
               Location = param.In?.ToString().ToLowerInvariant() ?? "query",
               Required = param.Required,
               Description = param.Description,
@@ -361,25 +358,25 @@ public class OpenApiAnalyzer
       return "string";
     }
 
-    return schema.Type switch
+    return schema.GetEffectiveType() switch
     {
-      "integer" => "int",
-      "number" => "decimal",
-      "boolean" => "bool",
-      "array" => "string[]",
+      JsonSchemaType.Integer => "int",
+      JsonSchemaType.Number => "decimal",
+      JsonSchemaType.Boolean => "bool",
+      JsonSchemaType.Array => "string[]",
       _ => "string",
     };
   }
 
   private string? GetRequestBodyType(OpenApiOperation operation)
   {
-    OpenApiMediaType? content = operation.RequestBody?.Content?.FirstOrDefault().Value;
-    OpenApiSchema? schema = content?.Schema;
+    var content = operation.RequestBody?.Content?.FirstOrDefault().Value;
+    var schema = (OpenApiSchema?)content?.Schema;
 
-    if (schema?.Reference != null)
+    if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {
       // Normalize the type name to match how model classes are generated
-      return _typeMapper.GetClassName(schema.Reference.Id);
+      return _typeMapper.GetClassName(schema.Id);
     }
 
     // Handle inline schemas (generate request models from inline body schemas)
@@ -424,7 +421,7 @@ public class OpenApiAnalyzer
   private string? GetResponseType(OpenApiOperation operation)
   {
     // Check if this is a 204 No Content response
-    KeyValuePair<string, OpenApiResponse>? successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
+    var successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
     if (successResponse?.Key == "204")
     {
       return "void";
@@ -437,38 +434,38 @@ public class OpenApiAnalyzer
       return "Stream";
     }
 
-    OpenApiResponse? response = successResponse?.Value;
-    OpenApiMediaType? content = response?.Content?.FirstOrDefault().Value;
-    OpenApiSchema? schema = content?.Schema;
+    var response = successResponse?.Value;
+    var content = response?.Content?.FirstOrDefault().Value;
+    var schema = (OpenApiSchema?)content?.Schema;
 
-    if (schema?.Reference != null)
+    if (schema != null && !string.IsNullOrEmpty(schema.Id))
     {
       // Normalize the type name to match how model classes are generated
-      return _typeMapper.GetClassName(schema.Reference.Id);
+      return _typeMapper.GetClassName(schema.Id);
     }
 
     // Handle direct array responses (e.g., array of TasksView without wrapper)
-    if (schema?.Type == "array" && schema.Items?.Reference != null)
+    if (schema != null && schema.IsType(JsonSchemaType.Array) && schema.Items != null && !string.IsNullOrEmpty(schema.Items.Id))
     {
-      string itemType = _typeMapper.GetClassName(schema.Items.Reference.Id);
+      string itemType = _typeMapper.GetClassName(schema.Items.Id);
       return $"List<{itemType}>";
     }
 
     // Handle wrapped responses like {data: Client[], meta: {}}
     if (schema?.Properties?.ContainsKey("data") == true)
     {
-      OpenApiSchema? dataSchema = schema.Properties["data"];
-      if (dataSchema.Type == "array" && dataSchema.Items?.Reference != null)
+      var dataSchema = (OpenApiSchema)schema.Properties["data"];
+      if (dataSchema.IsType(JsonSchemaType.Array) && dataSchema.Items != null && !string.IsNullOrEmpty(dataSchema.Items.Id))
       {
         // Normalize the type name for array items
-        string itemType = _typeMapper.GetClassName(dataSchema.Items.Reference.Id);
+        string itemType = _typeMapper.GetClassName(dataSchema.Items.Id);
         return $"{itemType}[]";
       }
 
-      if (dataSchema.Reference != null)
+      if (!string.IsNullOrEmpty(dataSchema.Id))
       {
         // Normalize the type name for data property
-        return _typeMapper.GetClassName(dataSchema.Reference.Id);
+        return _typeMapper.GetClassName(dataSchema.Id);
       }
     }
 
@@ -496,7 +493,7 @@ public class OpenApiAnalyzer
 
   private string GetResponseContentType(OpenApiOperation operation)
   {
-    KeyValuePair<string, OpenApiResponse>? successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
+    var successResponse = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
     string? contentType = successResponse?.Value?.Content?.Keys.FirstOrDefault();
     return contentType ?? "application/json";
   }
@@ -514,15 +511,15 @@ public class OpenApiAnalyzer
     ResponsePattern pattern = new();
 
     // Sample a few responses to detect patterns
-    IEnumerable<KeyValuePair<string, OpenApiResponse>> responses = document.Paths
+    var responses = document.Paths
       .SelectMany(p => p.Value.Operations)
       .SelectMany(o => o.Value.Responses)
       .Where(r => r.Key.StartsWith("2"))
       .Take(10); // Increased sample size for better analysis
 
-    foreach (KeyValuePair<string, OpenApiResponse> response in responses)
+    foreach (var response in responses)
     {
-      OpenApiSchema? schema = response.Value.Content?.FirstOrDefault().Value?.Schema;
+      var schema = (OpenApiSchema?)response.Value.Content?.FirstOrDefault().Value?.Schema;
       if (schema?.Properties?.ContainsKey("data") == true)
       {
         pattern.IsWrapped = true;
@@ -533,7 +530,7 @@ public class OpenApiAnalyzer
           pattern.MetaProperty = "meta";
 
           // Analyze the meta object properties with proper $ref resolution
-          OpenApiSchema? metaSchema = schema.Properties["meta"];
+          var metaSchema = (OpenApiSchema)schema.Properties["meta"];
           AnalyzeMetaSchema(metaSchema, pattern, document);
         }
       }
@@ -552,9 +549,9 @@ public class OpenApiAnalyzer
 
     if (resolvedSchema?.Properties != null)
     {
-      foreach (KeyValuePair<string, OpenApiSchema> metaProp in resolvedSchema.Properties)
+      foreach (var metaProp in resolvedSchema.Properties)
       {
-        string propType = GetSchemaTypeWithRef(metaProp.Value, document);
+        string propType = GetSchemaTypeWithRef((OpenApiSchema)metaProp.Value, document);
         pattern.MetaProperties[metaProp.Key] = propType;
       }
     }
@@ -562,13 +559,13 @@ public class OpenApiAnalyzer
 
   private OpenApiSchema? ResolveSchemaReference(OpenApiSchema schema, OpenApiDocument document)
   {
-    if (schema.Reference != null)
+    if (!string.IsNullOrEmpty(schema.Id))
     {
       // Extract schema name from reference like "#/components/schemas/Meta"
-      string? schemaName = schema.Reference.Id;
+      string? schemaName = schema.Id;
       if (document.Components?.Schemas?.ContainsKey(schemaName) == true)
       {
-        return document.Components.Schemas[schemaName];
+        return (OpenApiSchema)document.Components.Schemas[schemaName];
       }
     }
 
@@ -578,9 +575,9 @@ public class OpenApiAnalyzer
   private string GetSchemaTypeWithRef(OpenApiSchema schema, OpenApiDocument document)
   {
     // Handle $ref references
-    if (schema.Reference != null)
+    if (!string.IsNullOrEmpty(schema.Id))
     {
-      string? schemaName = schema.Reference.Id;
+      string? schemaName = schema.Id;
       // For nested objects, return the schema name as the type
       return schemaName;
     }
@@ -598,14 +595,14 @@ public class OpenApiAnalyzer
         string schemaName = metaProp.Value;
         if (document.Components?.Schemas?.ContainsKey(schemaName) == true)
         {
-          OpenApiSchema? schema = document.Components.Schemas[schemaName];
+          var schema = (OpenApiSchema)document.Components.Schemas[schemaName];
           Dictionary<string, string> properties = new();
 
           if (schema.Properties != null)
           {
-            foreach (KeyValuePair<string, OpenApiSchema> prop in schema.Properties)
+            foreach (var prop in schema.Properties)
             {
-              properties[prop.Key] = GetSchemaTypeWithRef(prop.Value, document);
+              properties[prop.Key] = GetSchemaTypeWithRef((OpenApiSchema)prop.Value, document);
             }
           }
 
@@ -626,12 +623,12 @@ public class OpenApiAnalyzer
 
   private string GetSchemaType(OpenApiSchema schema)
   {
-    return schema.Type switch
+    return schema.GetEffectiveType() switch
     {
-      "integer" => "int",
-      "number" => "decimal",
-      "boolean" => "bool",
-      "array" => "string[]",
+      JsonSchemaType.Integer => "int",
+      JsonSchemaType.Number => "decimal",
+      JsonSchemaType.Boolean => "bool",
+      JsonSchemaType.Array => "string[]",
       _ => "string",
     };
   }
@@ -641,9 +638,9 @@ public class OpenApiAnalyzer
     ParameterPattern pattern = new();
 
     // Look for common pagination/filtering parameters
-    List<OpenApiParameter> allParams = document.Paths
+    var allParams = document.Paths
       .SelectMany(p => p.Value.Operations)
-      .SelectMany(o => o.Value.Parameters ?? new List<OpenApiParameter>())
+      .SelectMany(o => o.Value.Parameters ?? (IList<IOpenApiParameter>)new List<IOpenApiParameter>())
       .ToList();
 
     List<string> allParamNames = allParams.Select(p => p.Name.ToLowerInvariant()).Distinct().ToList();

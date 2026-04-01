@@ -2,7 +2,7 @@ using System.CommandLine;
 using Apigen.Generator.Generators;
 using Apigen.Generator.Models;
 using Apigen.Generator.Services;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 namespace Apigen.Generator;
 
@@ -155,7 +155,7 @@ internal class Program
           string patchedPath = Path.ChangeExtension(firstSpecPath, ".patched.yaml");
           using FileStream fs = File.Create(patchedPath);
           using StreamWriter sw = new(fs);
-          Microsoft.OpenApi.Writers.OpenApiYamlWriter yamlWriter = new(sw);
+          OpenApiYamlWriter yamlWriter = new(sw);
           document.SerializeAsV3(yamlWriter);
           Console.WriteLine($"Patched spec written to: {patchedPath}");
         }
