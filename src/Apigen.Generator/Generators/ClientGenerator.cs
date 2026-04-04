@@ -1,4 +1,5 @@
 using Microsoft.OpenApi;
+using Apigen.Generator.Extensions;
 using Apigen.Generator.Models;
 using Apigen.Generator.Services;
 using System.Globalization;
@@ -25,6 +26,7 @@ public class ClientGenerator
   private readonly List<TypeNameOverride> _typeNameOverrides;
   private readonly Dictionary<string, ModelGenerationDecision>? _modelDecisions;
   private string _commonPathPrefix = "";
+  private OpenApiDocument? _currentDocument;
 
   public ClientGenerator(
     ClientGenerationOptions options,
@@ -53,6 +55,7 @@ public class ClientGenerator
   /// </summary>
   public async Task<GeneratedClientCode> GenerateAsync(OpenApiDocument document, string outputPath)
   {
+    _currentDocument = document;
     OpenApiAnalysis analysis = _analyzer.Analyze(document);
 
     // Detect common path prefix from all paths in the document
@@ -92,13 +95,11 @@ public class ClientGenerator
     GeneratedFile smartEnumConverter = GenerateSmartEnumConverter();
     result.RequestFiles.Add(smartEnumConverter);
 
-    // Generate multipart content helper if any operations use multipart/form-data
-    bool hasMultipartOps = analysis.Resources
-      .SelectMany(r => r.Operations)
-      .Any(o => o.RequestContentType == "multipart/form-data");
-    if (hasMultipartOps)
+    // Generate strongly-typed multipart content extensions for each DTO used with multipart/form-data
+    var multipartDtos = CollectMultipartDtos(document, analysis);
+    if (multipartDtos.Count > 0)
     {
-      GeneratedFile multipartHelper = GenerateMultipartContentExtensions();
+      GeneratedFile multipartHelper = GenerateMultipartContentExtensions(multipartDtos);
       result.RequestFiles.Add(multipartHelper);
     }
 
@@ -2347,64 +2348,240 @@ public class ClientGenerator
     };
   }
 
-  private GeneratedFile GenerateMultipartContentExtensions()
+  /// <summary>
+  /// Collects multipart DTO type names and their resolved schemas from both component schemas and inline operation schemas.
+  /// </summary>
+  private Dictionary<string, OpenApiSchema> CollectMultipartDtos(OpenApiDocument document, OpenApiAnalysis analysis)
+  {
+    Dictionary<string, OpenApiSchema> result = new();
+
+    var multipartOps = analysis.Resources
+      .SelectMany(r => r.Operations)
+      .Where(o => o.RequestContentType == "multipart/form-data" && !string.IsNullOrEmpty(o.RequestBodyType));
+
+    foreach (var op in multipartOps)
+    {
+      string typeName = ResolveCanonicalSchemaName(op.RequestBodyType!);
+      if (result.ContainsKey(typeName))
+        continue;
+
+      // Try component schemas first
+      if (document.Components?.Schemas != null &&
+          document.Components.Schemas.TryGetValue(typeName, out var schemaRef))
+      {
+        OpenApiSchema schema = schemaRef.ResolveSchema();
+        if (schema.Properties != null && schema.Properties.Count > 0)
+          result[typeName] = schema;
+        continue;
+      }
+
+      // For inline schemas, resolve from the operation's request body in the document
+      if (document.Paths != null)
+      {
+        foreach (var pathItem in document.Paths)
+        {
+          foreach (var pathOp in pathItem.Value.Operations)
+          {
+            var content = pathOp.Value.RequestBody?.Content?.FirstOrDefault().Value;
+            if (content?.Schema == null) continue;
+
+            OpenApiSchema inlineSchema = content.Schema.ResolveSchema();
+            if (inlineSchema.Properties == null || !inlineSchema.Properties.Any()) continue;
+
+            // Match by generating the same synthetic name
+            string? operationId = pathOp.Value.OperationId;
+            if (string.IsNullOrEmpty(operationId)) continue;
+
+            string syntheticName = _typeMapper.GetClassName(operationId) + "Request";
+            if (syntheticName == typeName)
+            {
+              result[typeName] = inlineSchema;
+              break;
+            }
+          }
+          if (result.ContainsKey(typeName)) break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private GeneratedFile GenerateMultipartContentExtensions(Dictionary<string, OpenApiSchema> multipartDtos)
   {
     StringBuilder sb = new();
     sb.AppendLine("using System.Net.Http;");
-    sb.AppendLine("using System.Reflection;");
-    sb.AppendLine("using System.Text.Json.Serialization;");
+    sb.AppendLine("using System.Text.Json;");
+    sb.AppendLine($"using {_options.ModelsNamespace};");
     sb.AppendLine();
     sb.AppendLine($"namespace {_options.Namespace};");
     sb.AppendLine();
     sb.AppendLine("internal static class MultipartContentExtensions");
     sb.AppendLine("{");
-    sb.AppendLine("  /// <summary>");
-    sb.AppendLine("  /// Converts a DTO object to MultipartFormDataContent for file upload endpoints.");
-    sb.AppendLine("  /// Properties of type byte[] are added as file content, all others as string fields.");
-    sb.AppendLine("  /// Uses JsonPropertyName attribute for field names.");
-    sb.AppendLine("  /// </summary>");
-    sb.AppendLine("  public static MultipartFormDataContent ToMultipartContent(this object dto)");
-    sb.AppendLine("  {");
-    sb.AppendLine("    MultipartFormDataContent content = new();");
-    sb.AppendLine();
-    sb.AppendLine("    foreach (PropertyInfo prop in dto.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))");
-    sb.AppendLine("    {");
-    sb.AppendLine("      object? value = prop.GetValue(dto);");
-    sb.AppendLine("      if (value == null) continue;");
-    sb.AppendLine();
-    sb.AppendLine("      // Use JsonPropertyName attribute for the field name, fall back to property name");
-    sb.AppendLine("      string fieldName = prop.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? prop.Name;");
-    sb.AppendLine();
-    sb.AppendLine("      if (value is byte[] bytes)");
-    sb.AppendLine("      {");
-    sb.AppendLine("        ByteArrayContent fileContent = new(bytes);");
-    sb.AppendLine("        content.Add(fileContent, fieldName, fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("      else if (value is Stream stream)");
-    sb.AppendLine("      {");
-    sb.AppendLine("        StreamContent streamContent = new(stream);");
-    sb.AppendLine("        content.Add(streamContent, fieldName, fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("      else if (value is bool boolValue)");
-    sb.AppendLine("      {");
-    sb.AppendLine("        content.Add(new StringContent(boolValue.ToString().ToLowerInvariant()), fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("      else if (value is DateTime dateTime)");
-    sb.AppendLine("      {");
-    sb.AppendLine("        content.Add(new StringContent(dateTime.ToString(\"O\")), fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("      else if (value is DateTimeOffset dateTimeOffset)");
-    sb.AppendLine("      {");
-    sb.AppendLine("        content.Add(new StringContent(dateTimeOffset.ToString(\"O\")), fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("      else");
-    sb.AppendLine("      {");
-    sb.AppendLine("        content.Add(new StringContent(value.ToString() ?? \"\"), fieldName);");
-    sb.AppendLine("      }");
-    sb.AppendLine("    }");
-    sb.AppendLine();
-    sb.AppendLine("    return content;");
-    sb.AppendLine("  }");
+
+    foreach (var (schemaName, schema) in multipartDtos)
+    {
+      if (schema.Properties == null || schema.Properties.Count == 0)
+        continue;
+
+      string shortClassName = ApplyTypeNameOverrides(_typeMapper.GetClassName(schemaName));
+      string className = $"{_options.ModelsNamespace}.{shortClassName}";
+      string paramName = shortClassName.ToDotNetCamelCase();
+
+      // Detect which property serves as filename (string property named "filename" by convention)
+      string? filenamePropertyName = null;
+      string? filenamePascalName = null;
+      foreach (var prop in schema.Properties)
+      {
+        if (prop.Key.Equals("filename", StringComparison.OrdinalIgnoreCase))
+        {
+          OpenApiSchema propSchema = prop.Value.ResolveSchema();
+          string clrType = _typeMapper.MapOpenApiTypeToClr(propSchema);
+          if (clrType.StartsWith("string"))
+          {
+            filenamePropertyName = prop.Key;
+            filenamePascalName = _typeMapper.GetPropertyName(prop.Key);
+            break;
+          }
+        }
+      }
+
+      sb.AppendLine($"  public static MultipartFormDataContent ToMultipartContent(this {className} {paramName})");
+      sb.AppendLine("  {");
+      sb.AppendLine("    MultipartFormDataContent content = new();");
+
+      ISet<string> requiredProps = schema.Required ?? (ISet<string>)new HashSet<string>();
+
+      foreach (var prop in schema.Properties)
+      {
+        string propKey = prop.Key;
+        OpenApiSchema propSchema = prop.Value.ResolveSchema();
+        string clrType = _typeMapper.MapOpenApiTypeToClr(propSchema);
+        string pascalName = _typeMapper.GetPropertyName(propKey);
+        bool isRequired = requiredProps.Contains(propKey);
+        bool isNullable = propSchema.IsNullable() || !isRequired;
+
+        // Skip the filename property — it's used as a parameter for binary fields, not sent as its own field
+        if (propKey == filenamePropertyName)
+          continue;
+
+        bool isBinary = clrType.StartsWith("byte[]");
+
+        if (isBinary)
+        {
+          // Binary properties get added as file content with filename
+          string defaultFilename = $"{propKey}.bin";
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine("    {");
+            if (filenamePropertyName != null)
+              sb.AppendLine($"      content.Add(new ByteArrayContent({paramName}.{pascalName}), \"{propKey}\", {paramName}.{filenamePascalName} ?? \"{defaultFilename}\");");
+            else
+              sb.AppendLine($"      content.Add(new ByteArrayContent({paramName}.{pascalName}), \"{propKey}\", \"{defaultFilename}\");");
+            sb.AppendLine("    }");
+          }
+          else
+          {
+            if (filenamePropertyName != null)
+              sb.AppendLine($"    content.Add(new ByteArrayContent({paramName}.{pascalName}), \"{propKey}\", {paramName}.{filenamePascalName} ?? \"{defaultFilename}\");");
+            else
+              sb.AppendLine($"    content.Add(new ByteArrayContent({paramName}.{pascalName}), \"{propKey}\", \"{defaultFilename}\");");
+          }
+        }
+        else if (clrType.StartsWith("bool"))
+        {
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.Value.ToString().ToLowerInvariant()), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString().ToLowerInvariant()), \"{propKey}\");");
+          }
+        }
+        else if (clrType.StartsWith("DateTime?") || clrType == "DateTime")
+        {
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.Value.ToString(\"O\")), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString(\"O\")), \"{propKey}\");");
+          }
+        }
+        else if (clrType.StartsWith("DateTimeOffset"))
+        {
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.Value.ToString(\"O\")), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString(\"O\")), \"{propKey}\");");
+          }
+        }
+        else if (clrType.StartsWith("Guid"))
+        {
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.Value.ToString()), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString()), \"{propKey}\");");
+          }
+        }
+        else if (clrType.StartsWith("List<") || clrType.StartsWith("Dictionary<"))
+        {
+          // Reference types — always null-check
+          sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+          sb.AppendLine($"      content.Add(new StringContent(JsonSerializer.Serialize({paramName}.{pascalName}, JsonConfig.Default)), \"{propKey}\");");
+        }
+        else if (clrType.StartsWith("int") || clrType.StartsWith("long") || clrType.StartsWith("short") ||
+                 clrType.StartsWith("float") || clrType.StartsWith("double") || clrType.StartsWith("decimal"))
+        {
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.Value.ToString()), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString()), \"{propKey}\");");
+          }
+        }
+        else if (clrType.StartsWith("string"))
+        {
+          // String is a reference type — always check for null even if schema marks it required,
+          // because the DTO property is generated as string? for nullable reference types.
+          sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+          sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}), \"{propKey}\");");
+        }
+        else
+        {
+          // Enum or other reference types: use ToString or JSON serialize
+          if (isNullable)
+          {
+            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.ToString() ?? \"\"), \"{propKey}\");");
+          }
+          else
+          {
+            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString() ?? \"\"), \"{propKey}\");");
+          }
+        }
+      }
+
+      sb.AppendLine("    return content;");
+      sb.AppendLine("  }");
+    }
+
     sb.AppendLine("}");
 
     return new GeneratedFile
