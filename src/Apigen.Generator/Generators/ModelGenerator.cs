@@ -241,6 +241,14 @@ public class ModelGenerator
       return;
     }
 
+    // Check if this is a oneOf schema with description-based enum mappings
+    // (e.g., CountryType with "- 528: Netherlands (NL/NLD)")
+    // These will be generated as enums later in GenerateEnumsAsync
+    if (IsOneOfDescriptionEnumSchema(schema))
+    {
+      return;
+    }
+
     // Generate single unified model (legacy behavior)
     if (_generatedModels.Contains(effectiveSchemaName))
     {
@@ -1014,11 +1022,21 @@ public class ModelGenerator
 
       foreach (var kvp in _currentDocument.Components.Schemas)
       {
-        if (IsEnumSchema(kvp.Value.ResolveSchema()))
+        OpenApiSchema resolved = kvp.Value.ResolveSchema();
+
+        if (IsEnumSchema(resolved))
         {
           string enumClassName = _typeMapper.GetClassName(kvp.Key);
           _generatedEnums.Add(enumClassName);
-          await GenerateEnhancedEnumAsync(kvp.Key, kvp.Value.ResolveSchema(), enhancedEnumGenerator, outputDir);
+          await GenerateEnhancedEnumAsync(kvp.Key, resolved, enhancedEnumGenerator, outputDir);
+        }
+        else if (enhancedEnumGenerator.IsOneOfEnumSchema(resolved))
+        {
+          // Handle oneOf schemas with description-based enum mappings
+          // (e.g., CountryType with "- 528: Netherlands (NL/NLD)")
+          string enumClassName = _typeMapper.GetClassName(kvp.Key);
+          _generatedEnums.Add(enumClassName);
+          await GenerateOneOfEnumAsync(kvp.Key, resolved, enhancedEnumGenerator, outputDir);
         }
       }
     }
@@ -1149,6 +1167,29 @@ public class ModelGenerator
   }
 
   /// <summary>
+  /// Checks if a schema is a oneOf with a single integer branch whose description
+  /// contains parseable enum mappings (e.g., "- 528: Netherlands (NL/NLD)").
+  /// Used to prevent generating empty classes for schemas that will become enums.
+  /// </summary>
+  private static bool IsOneOfDescriptionEnumSchema(OpenApiSchema schema)
+  {
+    if (schema.OneOf == null || schema.OneOf.Count == 0)
+      return false;
+
+    foreach (IOpenApiSchema branch in schema.OneOf)
+    {
+      OpenApiSchema resolved = branch.ResolveSchema();
+      if (resolved.IsType(JsonSchemaType.Integer) && !string.IsNullOrWhiteSpace(resolved.Description))
+      {
+        // Quick check: does the description contain lines like "- 123: Something"?
+        return resolved.Description.Contains("- ") && resolved.Description.Contains(": ");
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
   /// Generates an enhanced enum from OpenAPI schema using smart detection
   /// </summary>
   private async Task GenerateEnhancedEnumAsync(
@@ -1163,16 +1204,45 @@ public class ModelGenerator
       return;
     }
 
-    // Apply type name overrides to get the final enum name
-    string className = _typeMapper.GetClassName(enumName);
-
     // Analyze the enum with smart detection
     EnhancedEnumInfo enumInfo = generator.AnalyzeEnum(enumName, schema);
+    await WriteEnhancedEnumFileAsync(enumName, enumInfo, outputDir);
+  }
 
+  /// <summary>
+  /// Generates an enum from a oneOf schema with description-based enum mappings
+  /// </summary>
+  private async Task GenerateOneOfEnumAsync(
+    string enumName,
+    OpenApiSchema schema,
+    EnhancedEnumGenerator generator,
+    string outputDir)
+  {
+    // Skip if already generated as a legacy enum
+    if (_config.Enums.Any(e => e.Name.Equals(enumName, StringComparison.OrdinalIgnoreCase)))
+    {
+      return;
+    }
+
+    EnhancedEnumInfo enumInfo = generator.AnalyzeOneOfEnum(enumName, schema);
+    await WriteEnhancedEnumFileAsync(enumName, enumInfo, outputDir);
+  }
+
+  /// <summary>
+  /// Writes an enhanced enum file from analyzed enum information
+  /// </summary>
+  private async Task WriteEnhancedEnumFileAsync(
+    string enumName,
+    EnhancedEnumInfo enumInfo,
+    string outputDir)
+  {
     if (!enumInfo.Members.Any())
     {
       return; // Skip empty enums
     }
+
+    // Apply type name overrides to get the final enum name
+    string className = _typeMapper.GetClassName(enumName);
 
     StringBuilder sb = new();
 

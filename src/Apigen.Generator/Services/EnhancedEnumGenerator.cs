@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -31,6 +32,73 @@ public class EnhancedEnumGenerator
       foreach (var kvp in namingOverrides)
         _namingOverrides[kvp.Key] = kvp.Value;
     }
+  }
+
+  /// <summary>
+  /// Checks if a schema is a oneOf with a single branch whose description contains
+  /// parseable enum mappings (e.g., "- 528: Netherlands (NL/NLD)").
+  /// This is a common pattern in OpenAPI specs for integer enum types.
+  /// </summary>
+  public bool IsOneOfEnumSchema(OpenApiSchema schema)
+  {
+    if (schema.OneOf == null || schema.OneOf.Count == 0)
+      return false;
+
+    // Look for a branch with a parseable description
+    foreach (IOpenApiSchema branch in schema.OneOf)
+    {
+      OpenApiSchema resolved = branch.ResolveSchema();
+      if (resolved.IsType(JsonSchemaType.Integer) &&
+          TryParseDescriptionMappings(resolved.Description, out var mappings) &&
+          mappings.Count > 0)
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// <summary>
+  /// Analyzes a oneOf schema with description-based enum mappings and creates enhanced enum information.
+  /// Call IsOneOfEnumSchema first to verify the schema matches.
+  /// </summary>
+  public EnhancedEnumInfo AnalyzeOneOfEnum(string enumName, OpenApiSchema schema)
+  {
+    foreach (IOpenApiSchema branch in schema.OneOf ?? [])
+    {
+      OpenApiSchema resolved = branch.ResolveSchema();
+      if (resolved.IsType(JsonSchemaType.Integer) &&
+          TryParseDescriptionMappings(resolved.Description, out var mappings) &&
+          mappings.Count > 0)
+      {
+        EnhancedEnumInfo enumInfo = new()
+        {
+          Name = enumName,
+          Description = resolved.Title ?? schema.Description ?? "",
+          Strategy = EnumGenerationStrategy.ParseDescription,
+          HasDescriptions = true,
+          IsNumeric = true,
+        };
+
+        foreach (KeyValuePair<string, string> mapping in mappings)
+        {
+          string enhancedName = GenerateEnhancedName(mapping.Value, mapping.Key);
+          enumInfo.Members[enhancedName] = new EnumMemberInfo
+          {
+            RawValue = mapping.Key,
+            EnhancedName = enhancedName,
+            Description = mapping.Value,
+            NumericValue = int.TryParse(mapping.Key, out int num) ? num : null,
+          };
+        }
+
+        return enumInfo;
+      }
+    }
+
+    // Fallback — should not reach here if IsOneOfEnumSchema returned true
+    return new EnhancedEnumInfo { Name = enumName };
   }
 
   /// <summary>
@@ -338,8 +406,10 @@ public class EnhancedEnumGenerator
       return fallbackValue.ToDotNetPascalCase();
     }
 
+    // Remove parenthesized content (e.g., "(AF/AFG)", "(Keeling)", "(French part)")
+    string cleanDescription = Regex.Replace(description, @"\s*\([^)]*\)", "").Trim();
+
     // Remove unwanted words
-    string cleanDescription = description;
     foreach (string word in _options.NameGeneration.RemoveWords)
     {
       cleanDescription = Regex.Replace(cleanDescription, $@"\b{Regex.Escape(word)}\b", "", RegexOptions.IgnoreCase);
@@ -347,6 +417,9 @@ public class EnhancedEnumGenerator
 
     // Convert to .NET PascalCase
     string cleaned = cleanDescription.ToDotNetPascalCase();
+
+    // Remove any remaining invalid C# identifier characters
+    cleaned = CleanIdentifierName(cleaned);
 
     // Truncate if too long
     if (cleaned.Length > _options.NameGeneration.MaxLength)
@@ -409,6 +482,9 @@ public class EnhancedEnumGenerator
       return "";
     }
 
+    // Remove diacritics (e.g., ô -> o, é -> e, ç -> c, å -> a)
+    input = RemoveDiacritics(input);
+
     StringBuilder result = new();
     foreach (char c in input)
     {
@@ -423,6 +499,23 @@ public class EnhancedEnumGenerator
     }
 
     return result.ToString();
+  }
+
+  /// <summary>
+  /// Removes diacritics/accents from characters (e.g., ô -> o, é -> e, ç -> c)
+  /// </summary>
+  private static string RemoveDiacritics(string input)
+  {
+    string normalized = input.Normalize(NormalizationForm.FormD);
+    StringBuilder sb = new(normalized.Length);
+    foreach (char c in normalized)
+    {
+      if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+      {
+        sb.Append(c);
+      }
+    }
+    return sb.ToString().Normalize(NormalizationForm.FormC);
   }
 
   /// <summary>
