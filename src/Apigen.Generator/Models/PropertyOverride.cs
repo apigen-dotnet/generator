@@ -50,6 +50,19 @@ public class PropertyOverride
   public string? Enum { get; set; }
 
   /// <summary>
+  /// Optional: emit this property using the generic <c>Optional&lt;T&gt;</c> wrapper type instead
+  /// of a plain nullable reference. The wrapper distinguishes three semantic states:
+  ///   - Unset  (property omitted from JSON)         → <c>dto.Prop = default;</c>
+  ///   - Null   (property serialized as <c>null</c>) → <c>dto.Prop = null;</c>
+  ///   - Value  (property serialized with a value)   → <c>dto.Prop = "some";</c>
+  ///
+  /// Use this for request properties where the target API treats an explicit <c>null</c> as a
+  /// distinct filter value from "field omitted" (for example Immich's RandomSearchDto.city,
+  /// where <c>city: null</c> means "filter on assets without a city").
+  /// </summary>
+  public bool UseGenericOptionalType { get; set; }
+
+  /// <summary>
   /// Check if this override matches the given property, model, and data type
   /// </summary>
   public bool Matches(string propertyName, string modelName, string? dataType = null, string? format = null)

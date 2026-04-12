@@ -103,4 +103,34 @@ public class GeneratorConfigurationTests
     var options = config.ToGeneratorOptions();
     Assert.Equal(string.Empty, options.InputPath);
   }
+
+  [Fact]
+  public void PropertyOverride_UseGenericOptionalType_DefaultsToFalse()
+  {
+    var over = new PropertyOverride();
+    Assert.False(over.UseGenericOptionalType);
+  }
+
+  [Fact]
+  public async Task LoadFromFileAsync_ParsesPropertyOverrideUseGenericOptionalTypeFromToml()
+  {
+    string toml = "output_path = \"src\"\n\n[[specs]]\npath = \"specs/api.json\"\n\n[models]\nnamespace = \"Test.Models\"\n\n[[property_overrides]]\nproperty_filter = \"^(city|country|state)$\"\nmodel_filter = \"^RandomSearchDto$\"\nuse_generic_optional_type = true\n";
+
+    string tempFile = Path.Combine(Path.GetTempPath(), $"test-{Guid.NewGuid()}.toml");
+    try
+    {
+      await File.WriteAllTextAsync(tempFile, toml);
+      var config = await GeneratorConfiguration.LoadFromFileAsync(tempFile);
+
+      Assert.Single(config.PropertyOverrides);
+      PropertyOverride over = config.PropertyOverrides[0];
+      Assert.Equal("^(city|country|state)$", over.PropertyFilter);
+      Assert.Equal("^RandomSearchDto$", over.ModelFilter);
+      Assert.True(over.UseGenericOptionalType);
+    }
+    finally
+    {
+      File.Delete(tempFile);
+    }
+  }
 }

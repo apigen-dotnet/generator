@@ -120,6 +120,24 @@ public class ModelDeduplicatorTests
     return decisions;
   }
 
+  private static Dictionary<string, ModelGenerationDecision> RunFullPipeline(
+    OpenApiDocument document,
+    List<PropertyOverride> propertyOverrides)
+  {
+    SchemaUsageAnalyzer usageAnalyzer = new SchemaUsageAnalyzer(document);
+    Dictionary<string, SchemaUsage> usageMap = usageAnalyzer.Analyze();
+
+    SchemaVariantGenerator variantGenerator = new SchemaVariantGenerator(document, usageMap, propertyOverrides);
+    Dictionary<string, Dictionary<SchemaVariantType, SchemaVariant>> variants = variantGenerator.GenerateVariants();
+
+    ModelDeduplicator deduplicator = new ModelDeduplicator(usageMap, variants);
+    Dictionary<string, ModelGenerationDecision> decisions = deduplicator.MakeDecisions();
+
+    deduplicator.DeduplicateAcrossSchemas();
+
+    return decisions;
+  }
+
   [Fact]
   public void TwoIdenticalUnrelatedSchemas_NeitherIsSkipped()
   {
@@ -596,5 +614,60 @@ public class ModelDeduplicatorTests
     Assert.False(decisions["User"].SkipGeneration);
     Assert.False(decisions["UserCopy"].SkipGeneration);
     Assert.False(decisions["UserDuplicate"].SkipGeneration);
+  }
+
+  [Fact]
+  public void PatchedSchema_WithOptionalTypeOverride_NotDeduped()
+  {
+    OpenApiSchema fooSchema = CreateSchema(new[] { "name", "city" }, new[] { "name" });
+    OpenApiSchema patchedFooSchema = CreateSchema(new[] { "name", "city" }, new[] { "name" });
+
+    OpenApiPaths paths = CreateRequestPaths("FooRequest", "PatchedFooRequest");
+
+    OpenApiDocument document = CreateDocument(
+      new Dictionary<string, OpenApiSchema>
+      {
+        ["FooRequest"] = fooSchema,
+        ["PatchedFooRequest"] = patchedFooSchema
+      },
+      paths);
+
+    List<PropertyOverride> overrides = new()
+    {
+      new PropertyOverride
+      {
+        PropertyFilter = "^city$",
+        ModelFilter = "^PatchedFooRequest$",
+        UseGenericOptionalType = true
+      }
+    };
+
+    Dictionary<string, ModelGenerationDecision> decisions = RunFullPipeline(document, overrides);
+
+    Assert.False(decisions["FooRequest"].SkipGeneration);
+    Assert.False(decisions["PatchedFooRequest"].SkipGeneration);
+  }
+
+  [Fact]
+  public void PatchedSchema_WithoutOptionalOverride_StillDeduped()
+  {
+    OpenApiSchema fooSchema = CreateSchema(new[] { "name", "city" }, new[] { "name" });
+    OpenApiSchema patchedFooSchema = CreateSchema(new[] { "name", "city" }, new[] { "name" });
+
+    OpenApiPaths paths = CreateRequestPaths("FooRequest", "PatchedFooRequest");
+
+    OpenApiDocument document = CreateDocument(
+      new Dictionary<string, OpenApiSchema>
+      {
+        ["FooRequest"] = fooSchema,
+        ["PatchedFooRequest"] = patchedFooSchema
+      },
+      paths);
+
+    Dictionary<string, ModelGenerationDecision> decisions = RunFullPipeline(document);
+
+    Assert.False(decisions["FooRequest"].SkipGeneration);
+    Assert.True(decisions["PatchedFooRequest"].SkipGeneration);
+    Assert.Equal("FooRequest", decisions["PatchedFooRequest"].CanonicalSchemaName);
   }
 }

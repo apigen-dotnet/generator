@@ -15,12 +15,14 @@ public class SchemaVariantGenerator
 {
   private readonly OpenApiDocument _document;
   private readonly Dictionary<string, SchemaUsage> _usageMap;
+  private readonly List<PropertyOverride> _propertyOverrides;
   private readonly Dictionary<string, Dictionary<SchemaVariantType, SchemaVariant>> _variants = new();
 
-  public SchemaVariantGenerator(OpenApiDocument document, Dictionary<string, SchemaUsage> usageMap)
+  public SchemaVariantGenerator(OpenApiDocument document, Dictionary<string, SchemaUsage> usageMap, List<PropertyOverride>? propertyOverrides = null)
   {
     _document = document;
     _usageMap = usageMap;
+    _propertyOverrides = propertyOverrides ?? new List<PropertyOverride>();
   }
 
   /// <summary>
@@ -235,6 +237,10 @@ public class SchemaVariantGenerator
           }
         }
       }
+
+      bool hasOptionalOverride = _propertyOverrides.Any(o =>
+        o.UseGenericOptionalType && o.Matches(propName, variant.SchemaName));
+      sb.Append($"optional:{hasOptionalOverride}:");
 
       sb.Append(";");
     }

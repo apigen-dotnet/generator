@@ -93,6 +93,9 @@ public class ModelGenerator
     // Generate enhanced enum support files
     await GenerateEnhancedEnumSupportAsync(outputDir);
 
+    // Generate Optional<T> + JsonConverter helper (only if any property uses use_generic_optional_type)
+    await GenerateOptionalSupportAsync(outputDir);
+
     // Generate enums
     await GenerateEnumsAsync(outputDir);
 
@@ -107,7 +110,7 @@ public class ModelGenerator
       Dictionary<string, SchemaUsage> usageMap = analyzer.Analyze();
 
       Console.WriteLine("Generating schema variants...");
-      variantGenerator = new SchemaVariantGenerator(document, usageMap);
+      variantGenerator = new SchemaVariantGenerator(document, usageMap, _config.PropertyOverrides);
       Dictionary<string, Dictionary<SchemaVariantType, SchemaVariant>> variants = variantGenerator.GenerateVariants();
 
       Console.WriteLine("Making model generation decisions...");
@@ -472,10 +475,21 @@ public class ModelGenerator
       // Use enum type and make it nullable if not required
       propertyType = enumName + (isRequired ? "" : "?");
     }
+    else if (!string.IsNullOrEmpty(propertyOverride?.TargetType))
+    {
+      propertyType = propertyOverride.TargetType;
+    }
     else
     {
       // Use GetPropertyTypeFromISchema to preserve $ref information
-      propertyType = propertyOverride?.TargetType ?? GetPropertyTypeFromISchema(propertyISchema, isRequired, propertyName);
+      propertyType = GetPropertyTypeFromISchema(propertyISchema, isRequired, propertyName);
+    }
+
+    // Wrap in Optional<T> if configured — see PropertyOverride.UseGenericOptionalType.
+    if (propertyOverride?.UseGenericOptionalType == true)
+    {
+      string innerType = propertyType.TrimEnd('?');
+      propertyType = $"Optional<{innerType}>";
     }
 
     string indent = _formatting.GetIndentation();
@@ -540,8 +554,12 @@ public class ModelGenerator
       sb.AppendLine($"{indent}[JsonConverter(typeof({propertyOverride.JsonConverter}))]");
     }
 
-    // Add JsonIgnore attribute for Request models with non-nullable optional fields
-    // This prevents sending "field": null when the API expects the field to be omitted
+    // Decide whether an explicit [JsonIgnore(Condition = ...)] attribute is needed for this
+    // property. Precedence (highest first):
+    //   1. TriState properties: [JsonIgnore(WhenWritingDefault)] so default(Optional<T>) is skipped
+    //   2. Required-but-nullable: force Never so required fields are always sent
+    //   3. Legacy: non-nullable optional property on a request model -> WhenWritingNull
+    // If none apply, the property inherits the global JsonConfig.Default IgnoreCondition.
     bool isRequestModel = originalSchemaName.EndsWith("Request", StringComparison.OrdinalIgnoreCase);
     bool isNullableInSpec = propertySchema.IsNullable();
     bool isNullableInCSharp = propertyType.EndsWith("?") ||
@@ -551,16 +569,26 @@ public class ModelGenerator
                                !propertyType.Contains("DateOnly") && !propertyType.Contains("TimeOnly") &&
                                !propertyType.Contains("Guid"));
 
-    if (isRequestModel && !isRequired && !isNullableInSpec && isNullableInCSharp)
+    string? ignoreCondition = null;
+    if (propertyOverride?.UseGenericOptionalType == true)
     {
-      sb.AppendLine($"{indent}[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]");
+      // Optional<T>: default(Optional<T>) == Unset → skip property entirely
+      ignoreCondition = "WhenWritingDefault";
+    }
+    else if (isRequestModel && isRequired && propertyType.EndsWith("?"))
+    {
+      // Required nullable: always send
+      ignoreCondition = "Never";
+    }
+    else if (isRequestModel && !isRequired && !isNullableInSpec && isNullableInCSharp)
+    {
+      // Legacy: prevent sending "field": null for fields the API expects to be omitted
+      ignoreCondition = "WhenWritingNull";
     }
 
-    // For required properties with nullable types, ensure they're always serialized
-    // This overrides the global WhenWritingNull setting - APIs expect required fields to be present
-    if (isRequestModel && isRequired && propertyType.EndsWith("?"))
+    if (ignoreCondition is not null)
     {
-      sb.AppendLine($"{indent}[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]");
+      sb.AppendLine($"{indent}[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.{ignoreCondition})]");
     }
 
     if (propertyName != propertyNameClean)
@@ -645,6 +673,125 @@ public class ModelGenerator
         await File.WriteAllTextAsync(converterPath, converterContent.ToString());
       }
     }
+  }
+
+  /// <summary>
+  /// Emits the generic <c>Optional&lt;T&gt;</c> wrapper struct + JSON converter factory when at
+  /// least one <see cref="PropertyOverride"/> enables <c>use_generic_optional_type</c>. Written
+  /// as a single self-contained file <c>_Optional.g.cs</c> in the Models output directory so no
+  /// external dependency is required.
+  /// </summary>
+  private async Task GenerateOptionalSupportAsync(string outputDir)
+  {
+    if (!_config.PropertyOverrides.Any(o => o.UseGenericOptionalType))
+    {
+      return;
+    }
+
+    StringBuilder sb = new();
+    sb.AppendLine("// <auto-generated />");
+    sb.AppendLine("// Generic tri-state wrapper emitted by apigen for properties configured with");
+    sb.AppendLine("// use_generic_optional_type = true. Distinguishes three semantic states:");
+    sb.AppendLine("//   default(Optional<T>)  → Unset (property omitted from JSON output)");
+    sb.AppendLine("//   new Optional<T>(null) → Null  (property serialized as JSON null)");
+    sb.AppendLine("//   new Optional<T>(\"x\")  → Value (property serialized with the value)");
+    sb.AppendLine("//");
+    sb.AppendLine("// Implicit conversion from T means `dto.Prop = \"x\"`, `dto.Prop = null`, and not");
+    sb.AppendLine("// assigning at all all work without any ritual. To unset after assigning, use");
+    sb.AppendLine("// `dto.Prop = default;`.");
+    sb.AppendLine();
+    sb.AppendLine("using System;");
+    sb.AppendLine("using System.Collections.Generic;");
+    sb.AppendLine("using System.Text.Json;");
+    sb.AppendLine("using System.Text.Json.Serialization;");
+    sb.AppendLine();
+    if (_options.GenerateNullableReferenceTypes)
+    {
+      sb.AppendLine("#nullable enable");
+      sb.AppendLine();
+    }
+    sb.AppendLine($"namespace {_options.Namespace};");
+    sb.AppendLine();
+    sb.AppendLine("/// <summary>");
+    sb.AppendLine("/// Generic tri-state wrapper: distinguishes Unset / Null / Value.");
+    sb.AppendLine("/// </summary>");
+    sb.AppendLine("[JsonConverter(typeof(OptionalJsonConverterFactory))]");
+    sb.AppendLine("public readonly struct Optional<T> : IEquatable<Optional<T>>");
+    sb.AppendLine("{");
+    sb.AppendLine("  public Optional(T? value)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    Value = value;");
+    sb.AppendLine("    HasValue = true;");
+    sb.AppendLine("  }");
+    sb.AppendLine();
+    sb.AppendLine("  /// <summary>Underlying value (only meaningful when <see cref=\"HasValue\"/> is true).</summary>");
+    sb.AppendLine("  public T? Value { get; }");
+    sb.AppendLine();
+    sb.AppendLine("  /// <summary>True when this instance represents Null or Value. False for Unset (default).</summary>");
+    sb.AppendLine("  public bool HasValue { get; }");
+    sb.AppendLine();
+    sb.AppendLine("  /// <summary>True when HasValue is true AND Value is null.</summary>");
+    sb.AppendLine("  public bool IsNull => HasValue && Value is null;");
+    sb.AppendLine();
+    sb.AppendLine("  public static implicit operator Optional<T>(T? value) => new Optional<T>(value);");
+    sb.AppendLine("  public static implicit operator T?(Optional<T> optional) => optional.Value;");
+    sb.AppendLine();
+    sb.AppendLine("  public bool Equals(Optional<T> other) =>");
+    sb.AppendLine("    HasValue == other.HasValue && EqualityComparer<T?>.Default.Equals(Value, other.Value);");
+    sb.AppendLine();
+    sb.AppendLine("  public override bool Equals(object? obj) => obj is Optional<T> o && Equals(o);");
+    sb.AppendLine();
+    sb.AppendLine("  public override int GetHashCode() =>");
+    sb.AppendLine("    HasValue ? HashCode.Combine(true, Value) : 0;");
+    sb.AppendLine();
+    sb.AppendLine("  public static bool operator ==(Optional<T> left, Optional<T> right) => left.Equals(right);");
+    sb.AppendLine("  public static bool operator !=(Optional<T> left, Optional<T> right) => !left.Equals(right);");
+    sb.AppendLine("}");
+    sb.AppendLine();
+    sb.AppendLine("/// <summary>");
+    sb.AppendLine("/// JsonConverterFactory that produces per-T converters for <see cref=\"Optional{T}\"/>.");
+    sb.AppendLine("/// </summary>");
+    sb.AppendLine("internal sealed class OptionalJsonConverterFactory : JsonConverterFactory");
+    sb.AppendLine("{");
+    sb.AppendLine("  public override bool CanConvert(Type typeToConvert) =>");
+    sb.AppendLine("    typeToConvert.IsGenericType && typeToConvert.GetGenericTypeDefinition() == typeof(Optional<>);");
+    sb.AppendLine();
+    sb.AppendLine("  public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    Type innerType = typeToConvert.GetGenericArguments()[0];");
+    sb.AppendLine("    Type converterType = typeof(OptionalJsonConverter<>).MakeGenericType(innerType);");
+    sb.AppendLine("    return (JsonConverter)Activator.CreateInstance(converterType)!;");
+    sb.AppendLine("  }");
+    sb.AppendLine("}");
+    sb.AppendLine();
+    sb.AppendLine("internal sealed class OptionalJsonConverter<T> : JsonConverter<Optional<T>>");
+    sb.AppendLine("{");
+    sb.AppendLine("  public override Optional<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    if (reader.TokenType == JsonTokenType.Null)");
+    sb.AppendLine("    {");
+    sb.AppendLine("      return new Optional<T>(default);");
+    sb.AppendLine("    }");
+    sb.AppendLine("    T? value = JsonSerializer.Deserialize<T>(ref reader, options);");
+    sb.AppendLine("    return new Optional<T>(value);");
+    sb.AppendLine("  }");
+    sb.AppendLine();
+    sb.AppendLine("  public override void Write(Utf8JsonWriter writer, Optional<T> value, JsonSerializerOptions options)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    // When !HasValue the serializer should have skipped this property via");
+    sb.AppendLine("    // [JsonIgnore(WhenWritingDefault)]. If we do get called with an Unset value,");
+    sb.AppendLine("    // fall back to writing JSON null rather than throwing.");
+    sb.AppendLine("    if (value.IsNull || !value.HasValue)");
+    sb.AppendLine("    {");
+    sb.AppendLine("      writer.WriteNullValue();");
+    sb.AppendLine("      return;");
+    sb.AppendLine("    }");
+    sb.AppendLine("    JsonSerializer.Serialize(writer, value.Value, options);");
+    sb.AppendLine("  }");
+    sb.AppendLine("}");
+
+    string filePath = Path.Combine(outputDir, "_Optional.g.cs");
+    await File.WriteAllTextAsync(filePath, sb.ToString());
   }
 
   /// <summary>
@@ -2036,10 +2183,21 @@ public static class EnumExtensions
       bool shouldBeNullable = purpose == ModelPurpose.PatchRequest || !isRequired;
       propertyType = enumName + (shouldBeNullable ? "?" : "");
     }
+    else if (!string.IsNullOrEmpty(propertyOverride?.TargetType))
+    {
+      propertyType = propertyOverride.TargetType;
+    }
     else
     {
       // Get base type without considering required (we'll handle that separately)
-      propertyType = propertyOverride?.TargetType ?? GetPropertyTypeForPurpose(propertySchema, isRequired, propertyName, purpose);
+      propertyType = GetPropertyTypeForPurpose(propertySchema, isRequired, propertyName, purpose);
+    }
+
+    // Wrap in Optional<T> if configured — see PropertyOverride.UseGenericOptionalType.
+    if (propertyOverride?.UseGenericOptionalType == true)
+    {
+      string innerType = propertyType.TrimEnd('?');
+      propertyType = $"Optional<{innerType}>";
     }
 
     // Add XML documentation
@@ -2059,10 +2217,22 @@ public static class EnumExtensions
       sb.AppendLine($"{indent}[JsonConverter(typeof({propertyOverride.JsonConverter}))]");
     }
 
-    // For PATCH models, add JsonIgnore(WhenWritingNull) to all properties
-    if (purpose == ModelPurpose.PatchRequest)
+    // Decide explicit [JsonIgnore(Condition = ...)] for this property. See GenerateProperty()
+    // for the full precedence rationale.
+    string? purposeIgnoreCondition = null;
+    if (propertyOverride?.UseGenericOptionalType == true)
     {
-      sb.AppendLine($"{indent}[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]");
+      purposeIgnoreCondition = "WhenWritingDefault";
+    }
+    else if (purpose == ModelPurpose.PatchRequest)
+    {
+      // PATCH semantics: only send explicitly-set fields
+      purposeIgnoreCondition = "WhenWritingNull";
+    }
+
+    if (purposeIgnoreCondition is not null)
+    {
+      sb.AppendLine($"{indent}[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.{purposeIgnoreCondition})]");
     }
 
     // Add JSON property name attribute if different
@@ -2359,9 +2529,20 @@ public static class EnumExtensions
       // Use enum type and make it nullable if not required
       propertyType = enumName + (isRequired ? "" : "?");
     }
+    else if (!string.IsNullOrEmpty(propertyOverride?.TargetType))
+    {
+      propertyType = propertyOverride.TargetType;
+    }
     else
     {
-      propertyType = propertyOverride?.TargetType ?? GetPropertyType(propertySchema, isRequired, propertyName);
+      propertyType = GetPropertyType(propertySchema, isRequired, propertyName);
+    }
+
+    // Wrap in Optional<T> if configured — see PropertyOverride.UseGenericOptionalType.
+    if (propertyOverride?.UseGenericOptionalType == true)
+    {
+      string innerType = propertyType.TrimEnd('?');
+      propertyType = $"Optional<{innerType}>";
     }
 
     // Add JSON converter attribute if specified
@@ -2370,7 +2551,8 @@ public static class EnumExtensions
       sb.AppendLine($"  [JsonConverter(typeof({propertyOverride.JsonConverter}))]");
     }
 
-    // Add JsonIgnore attribute for Request models with non-nullable optional fields
+    // Decide whether an explicit [JsonIgnore(Condition = ...)] attribute is needed for this
+    // property. See GenerateProperty() for the precedence rationale; both paths share it.
     bool isRequestModel = variantType == SchemaVariantType.Request;
     bool isNullableInSpec = propertySchema.IsNullable();
     string nullSuffix = ShouldBeNullable(propertyType, isRequired) ? "?" : "";
@@ -2381,9 +2563,23 @@ public static class EnumExtensions
                                !propertyType.Contains("DateOnly") && !propertyType.Contains("TimeOnly") &&
                                !propertyType.Contains("Guid"));
 
-    if (isRequestModel && !isRequired && !isNullableInSpec && isNullableInCSharp)
+    string? ignoreCondition = null;
+    if (propertyOverride?.UseGenericOptionalType == true)
     {
-      sb.AppendLine("  [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]");
+      ignoreCondition = "WhenWritingDefault";
+    }
+    else if (isRequestModel && isRequired && propertyType.EndsWith("?"))
+    {
+      ignoreCondition = "Never";
+    }
+    else if (isRequestModel && !isRequired && !isNullableInSpec && isNullableInCSharp)
+    {
+      ignoreCondition = "WhenWritingNull";
+    }
+
+    if (ignoreCondition is not null)
+    {
+      sb.AppendLine($"  [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.{ignoreCondition})]");
     }
 
     // Add JSON property attribute
@@ -2578,11 +2774,26 @@ public static class EnumExtensions
 
     string? enumName = propertyOverride?.Enum ?? propertyOverride?.EnumName;
 
+    string resolved;
     if (!string.IsNullOrEmpty(enumName))
     {
-      return enumName + (isRequired ? "" : "?");
+      resolved = enumName + (isRequired ? "" : "?");
+    }
+    else if (!string.IsNullOrEmpty(propertyOverride?.TargetType))
+    {
+      resolved = propertyOverride.TargetType;
+    }
+    else
+    {
+      resolved = GetPropertyType(propertySchema, isRequired, propertyName);
     }
 
-    return propertyOverride?.TargetType ?? GetPropertyType(propertySchema, isRequired, propertyName);
+    if (propertyOverride?.UseGenericOptionalType == true)
+    {
+      string innerType = resolved.TrimEnd('?');
+      resolved = $"Optional<{innerType}>";
+    }
+
+    return resolved;
   }
 }
