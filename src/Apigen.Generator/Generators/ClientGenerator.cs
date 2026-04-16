@@ -687,6 +687,12 @@ public class ClientGenerator
       return "void";
     }
 
+    // Binary stream responses are returned directly, not wrapped in ApiResponse
+    if (baseType == "Stream")
+    {
+      return "Stream";
+    }
+
     // Apply response type overrides from configuration
     foreach (ResponseTypeOverride responseOverride in _options.ResponseTypeOverrides)
     {

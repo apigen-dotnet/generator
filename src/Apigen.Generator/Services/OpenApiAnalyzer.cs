@@ -518,6 +518,7 @@ public class OpenApiAnalyzer
 
   private bool IsBinaryContentType(string contentType) =>
     contentType is "application/octet-stream"
+      or "application/pdf"
       or "image/jpeg" or "image/png" or "image/gif" or "image/webp"
       or "audio/mpeg" or "video/mp4"
       || contentType.StartsWith("image/")
