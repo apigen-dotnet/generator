@@ -7,10 +7,18 @@ namespace Apigen.Generator.Services;
 
 public class TypeMapper
 {
+  private static readonly char[] s_tokenSeparators = { ' ', '\t', '-' };
+
   private readonly List<TypeNameOverride> _typeNameOverrides;
   private readonly Dictionary<string, string> _namingOverrides;
+  private readonly Dictionary<string, string> _projectAcronyms;
+  private readonly HashSet<string> _stopWords;
 
-  public TypeMapper(List<TypeNameOverride>? typeNameOverrides = null, Dictionary<string, string>? namingOverrides = null)
+  public TypeMapper(
+    List<TypeNameOverride>? typeNameOverrides = null,
+    Dictionary<string, string>? namingOverrides = null,
+    Dictionary<string, string>? projectAcronyms = null,
+    IEnumerable<string>? stopWords = null)
   {
     _typeNameOverrides = typeNameOverrides ?? new List<TypeNameOverride>();
     _namingOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -19,6 +27,30 @@ public class TypeMapper
       foreach (var kvp in namingOverrides)
         _namingOverrides[kvp.Key] = kvp.Value;
     }
+    _projectAcronyms = projectAcronyms ?? new Dictionary<string, string>();
+    _stopWords = stopWords != null
+      ? new HashSet<string>(stopWords, StringComparer.OrdinalIgnoreCase)
+      : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+  }
+
+  /// <summary>
+  /// Strip stop-word tokens from a name. Operates on whitespace/hyphen-separated
+  /// tokens; substrings are never touched. Returns <paramref name="name"/>
+  /// unchanged if stripping would produce an empty string or no stop-words are
+  /// configured.
+  /// </summary>
+  private string StripStopWords(string name)
+  {
+    if (_stopWords.Count == 0 || string.IsNullOrEmpty(name))
+      return name;
+
+    string[] tokens = name.Split(s_tokenSeparators, StringSplitOptions.RemoveEmptyEntries);
+    string[] kept = tokens.Where(t => !_stopWords.Contains(t)).ToArray();
+
+    if (kept.Length == 0)
+      return name;
+
+    return string.Join(' ', kept);
   }
 
   /// <summary>
@@ -33,7 +65,8 @@ public class TypeMapper
     if (_namingOverrides.TryGetValue(originalName, out string? overrideName))
       return overrideName;
 
-    return originalName.ToDotNetPascalCase();
+    string stripped = StripStopWords(originalName);
+    return stripped.ToDotNetPascalCase();
   }
 
   public string MapOpenApiTypeToClr(OpenApiSchema schema, bool useNullable = true)
@@ -246,10 +279,13 @@ public class TypeMapper
     if (_namingOverrides.TryGetValue(name, out string? classOverride))
       return classOverride;
 
-    // Step 3: Use ToDotNetPascalCase which follows Microsoft naming conventions
+    // Step 3: Strip configured stop-words (e.g. "a", "an", "the") as whole tokens
+    cleanName = StripStopWords(cleanName);
+
+    // Step 4: Use ToDotNetPascalCase which follows Microsoft naming conventions
     string result = cleanName.ToDotNetPascalCase();
 
-    // Step 4: Normalize common acronyms to proper casing
+    // Step 5: Normalize common acronyms to proper casing
     result = NormalizeAcronyms(result);
 
     return result;
@@ -286,6 +322,59 @@ public class TypeMapper
   /// Normalizes common acronyms to proper PascalCase
   /// e.g., "ByID" -> "ById", "UUID" -> "Uuid", "HTTPSRequest" -> "HttpsRequest"
   /// </summary>
+  /// <summary>
+  /// Built-in acronym dictionary applied to all generated identifiers.
+  /// Project-specific entries from <see cref="NamingOptions.Acronyms"/> are
+  /// merged on top of this baseline (project entries win on key collision).
+  /// Use word boundary regex to avoid partial matches.
+  /// </summary>
+  private static readonly Dictionary<string, string> s_baselineAcronyms = new()
+  {
+    // Two-letter acronyms
+    { "ID", "Id" },
+    { "UI", "Ui" },
+    { "IO", "IO" },
+    { "DB", "Db" },
+    { "OS", "Os" },
+
+    // Three-letter acronyms
+    { "API", "Api" },
+    { "URL", "Url" },
+    { "URI", "Uri" },
+    { "XML", "Xml" },
+    { "JSON", "Json" },
+    { "HTML", "Html" },
+    { "CSS", "Css" },
+    { "SQL", "Sql" },
+    { "JWT", "Jwt" },
+    { "PDF", "Pdf" },
+    { "PNG", "Png" },
+    { "JPG", "Jpg" },
+    { "GIF", "Gif" },
+    { "CSV", "Csv" },
+    { "TLS", "Tls" },
+    { "SSL", "Ssl" },
+    { "SSH", "Ssh" },
+    { "FTP", "Ftp" },
+    { "DNS", "Dns" },
+    { "CDN", "Cdn" },
+    { "SDK", "Sdk" },
+
+    // Four-letter acronyms
+    { "HTTP", "Http" },
+    { "HTTPS", "Https" },
+    { "UUID", "Uuid" },
+    { "GUID", "Guid" },
+    { "LDAP", "Ldap" },
+    { "SAML", "Saml" },
+    { "SMTP", "Smtp" },
+    { "REST", "Rest" },
+    { "SOAP", "Soap" },
+
+    // Five+ letter acronyms
+    { "OAUTH", "OAuth" },  // Special case: OAuth not Oauth
+  };
+
   private string NormalizeAcronyms(string name)
   {
     if (string.IsNullOrEmpty(name))
@@ -293,69 +382,32 @@ public class TypeMapper
       return name;
     }
 
-    // Dictionary of acronym patterns and their normalized forms
-    // Use word boundary regex to avoid partial matches
-    Dictionary<string, string> acronyms = new Dictionary<string, string>
+    // Project-specific acronyms override the baseline. Apply project entries
+    // first so longer/more-specific patterns (e.g. "HAIP") match before any
+    // baseline shorter substrings could interfere.
+    foreach (var kvp in _projectAcronyms)
     {
-      // Two-letter acronyms
-      { "ID", "Id" },
-      { "UI", "Ui" },
-      { "IO", "IO" },
-      { "DB", "Db" },
-      { "OS", "Os" },
+      name = ApplyAcronymRule(name, kvp.Key, kvp.Value);
+    }
 
-      // Three-letter acronyms
-      { "API", "Api" },
-      { "URL", "Url" },
-      { "URI", "Uri" },
-      { "XML", "Xml" },
-      { "JSON", "Json" },
-      { "HTML", "Html" },
-      { "CSS", "Css" },
-      { "SQL", "Sql" },
-      { "JWT", "Jwt" },
-      { "PDF", "Pdf" },
-      { "PNG", "Png" },
-      { "JPG", "Jpg" },
-      { "GIF", "Gif" },
-      { "CSV", "Csv" },
-      { "TLS", "Tls" },
-      { "SSL", "Ssl" },
-      { "SSH", "Ssh" },
-      { "FTP", "Ftp" },
-      { "DNS", "Dns" },
-      { "CDN", "Cdn" },
-      { "SDK", "Sdk" },
-
-      // Four-letter acronyms
-      { "HTTP", "Http" },
-      { "HTTPS", "Https" },
-      { "UUID", "Uuid" },
-      { "GUID", "Guid" },
-      { "LDAP", "Ldap" },
-      { "SAML", "Saml" },
-      { "SMTP", "Smtp" },
-      { "REST", "Rest" },
-      { "SOAP", "Soap" },
-
-      // Five+ letter acronyms
-      { "OAUTH", "OAuth" },  // Special case: OAuth not Oauth
-    };
-
-    // Apply replacements for acronyms in PascalCase identifiers
-    foreach (var kvp in acronyms)
+    foreach (var kvp in s_baselineAcronyms)
     {
-      // Use regex to match acronym when it's:
-      // 1. At the start: "IDToken" -> "IdToken"
-      // 2. After lowercase: "ClientID" -> "ClientId", "ByID" -> "ById"
-      // 3. Followed by uppercase or end: "GetClientIDAsync" -> "GetClientIdAsync"
-
-      // Pattern: (start OR after lowercase)(ACRONYM)(before uppercase OR end)
-      string pattern = $@"(^|(?<=[a-z])){kvp.Key}(?=[A-Z]|$)";
-      name = System.Text.RegularExpressions.Regex.Replace(name, pattern, kvp.Value);
+      // Skip if project already overrode this key
+      if (_projectAcronyms.ContainsKey(kvp.Key))
+        continue;
+      name = ApplyAcronymRule(name, kvp.Key, kvp.Value);
     }
 
     return name;
   }
 
+  private static string ApplyAcronymRule(string name, string acronym, string replacement)
+  {
+    // Match acronym when it's:
+    // 1. At the start: "IDToken" -> "IdToken"
+    // 2. After lowercase: "ClientID" -> "ClientId", "ByID" -> "ById"
+    // 3. Followed by uppercase or end: "GetClientIDAsync" -> "GetClientIdAsync"
+    string pattern = $@"(^|(?<=[a-z])){System.Text.RegularExpressions.Regex.Escape(acronym)}(?=[A-Z]|$)";
+    return System.Text.RegularExpressions.Regex.Replace(name, pattern, replacement);
+  }
 }

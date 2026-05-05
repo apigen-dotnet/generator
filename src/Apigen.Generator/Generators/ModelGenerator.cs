@@ -57,7 +57,7 @@ public class ModelGenerator
       JsonConverters = new List<JsonConverterConfig>(),
       GlobalUsings = new List<string>(),
     };
-    _typeMapper = new TypeMapper(_config.TypeNameOverrides, _config.Naming.Overrides);
+    _typeMapper = new TypeMapper(_config.TypeNameOverrides, _config.Naming.Overrides, _config.Naming.Acronyms, _config.Naming.StopWords);
     _generatedModels = new HashSet<string>();
     _generatedEnums = new HashSet<string>();
   }
@@ -67,7 +67,7 @@ public class ModelGenerator
     _options = options;
     _formatting = config.Formatting;
     _config = config;
-    _typeMapper = new TypeMapper(config.TypeNameOverrides, config.Naming.Overrides);
+    _typeMapper = new TypeMapper(config.TypeNameOverrides, config.Naming.Overrides, config.Naming.Acronyms, config.Naming.StopWords);
     _generatedModels = new HashSet<string>();
     _generatedEnums = new HashSet<string>();
   }
@@ -181,7 +181,8 @@ public class ModelGenerator
     OpenApiSchema schema,
     string outputDir,
     Dictionary<string, ModelGenerationDecision>? decisions = null,
-    SchemaVariantGenerator? variantGenerator = null)
+    SchemaVariantGenerator? variantGenerator = null,
+    string? specPointer = null)
   {
     // Apply type name overrides FIRST (before splitting)
     TypeNameOverride? typeOverride = _config.TypeNameOverrides.FirstOrDefault(o => o.Matches(schemaName));
@@ -336,9 +337,18 @@ public class ModelGenerator
     {
       sb.AppendLine("/// <summary>");
 
-      // Always add original schema name and path
-      sb.AppendLine($"/// {originalClassName} from OpenAPI schema.");
-      sb.AppendLine($"/// Schema path: #/components/schemas/{schemaName}");
+      // Source pointer: either an explicit spec pointer (e.g. for synthesized
+      // inline-request-body models) or the canonical components.schemas path.
+      if (!string.IsNullOrEmpty(specPointer))
+      {
+        sb.AppendLine($"/// {originalClassName} (generated from inline request body).");
+        sb.AppendLine($"/// Source: {specPointer}");
+      }
+      else
+      {
+        sb.AppendLine($"/// {originalClassName} from OpenAPI schema.");
+        sb.AppendLine($"/// Schema path: #/components/schemas/{schemaName}");
+      }
 
       // Add separator if there's also a description
       if (!string.IsNullOrEmpty(schema.Description))
@@ -358,7 +368,7 @@ public class ModelGenerator
       sb.AppendLine("/// </summary>");
     }
 
-    sb.AppendLine($"public class {className}");
+    sb.AppendLine($"public partial class {className}");
     sb.AppendLine("{");
 
     // Merge properties from allOf schemas
@@ -1137,13 +1147,19 @@ public class ModelGenerator
             string? operationId = operation.Value.OperationId;
             if (!string.IsNullOrEmpty(operationId))
             {
-              string modelName = operationId.ToDotNetPascalCase() + "Request";
+              // Use TypeMapper.GetClassName so configured stop-words, acronyms,
+              // and naming overrides are applied consistently with the client side.
+              string modelName = _typeMapper.GetClassName(operationId) + "Request";
 
               // Avoid duplicates
               if (!generatedRequestModels.Contains(modelName))
               {
                 generatedRequestModels.Add(modelName);
-                await GenerateModelClassAsync(modelName, schema, outputDir);
+                // Human-readable form: HTTP method + path + body location.
+                // Not a strict JSON Pointer (RFC 6901 would require ~1 escaping
+                // for slashes), but the docstring is advisory not machine-parsed.
+                string pointer = $"{operation.Key.ToString().ToUpperInvariant()} {path.Key} (requestBody)";
+                await GenerateModelClassAsync(modelName, schema, outputDir, specPointer: pointer);
               }
             }
           }
@@ -2105,7 +2121,7 @@ public static class EnumExtensions
     sb.AppendLine("/// </summary>");
 
     string className = _typeMapper.GetClassName(modelName);
-    sb.AppendLine($"public class {className}");
+    sb.AppendLine($"public partial class {className}");
     sb.AppendLine("{");
 
     // Generate properties using variant's filtered property list (no readOnly for requests)
@@ -2457,7 +2473,7 @@ public static class EnumExtensions
     sb.AppendLine("/// </summary>");
 
     string className = _typeMapper.GetClassName(modelName);
-    sb.AppendLine($"public class {className}");
+    sb.AppendLine($"public partial class {className}");
     sb.AppendLine("{");
 
     // Generate properties using variant's filtered property list

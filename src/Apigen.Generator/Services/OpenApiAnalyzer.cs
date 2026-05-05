@@ -14,9 +14,13 @@ public class OpenApiAnalyzer
 {
   private readonly TypeMapper _typeMapper;
 
-  public OpenApiAnalyzer(List<TypeNameOverride>? typeNameOverrides = null, Dictionary<string, string>? namingOverrides = null)
+  public OpenApiAnalyzer(
+    List<TypeNameOverride>? typeNameOverrides = null,
+    Dictionary<string, string>? namingOverrides = null,
+    Dictionary<string, string>? projectAcronyms = null,
+    IEnumerable<string>? stopWords = null)
   {
-    _typeMapper = new TypeMapper(typeNameOverrides, namingOverrides);
+    _typeMapper = new TypeMapper(typeNameOverrides, namingOverrides, projectAcronyms, stopWords);
   }
 
   /// <summary>

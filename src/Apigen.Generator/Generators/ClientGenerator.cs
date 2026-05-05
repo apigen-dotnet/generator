@@ -40,8 +40,8 @@ public class ClientGenerator
   {
     _typeNameOverrides = typeNameOverrides ?? new List<TypeNameOverride>();
     _naming = naming ?? new NamingOptions();
-    _analyzer = new OpenApiAnalyzer(_typeNameOverrides, _naming.Overrides);
-    _typeMapper = new TypeMapper(_typeNameOverrides, _naming.Overrides);
+    _analyzer = new OpenApiAnalyzer(_typeNameOverrides, _naming.Overrides, _naming.Acronyms, _naming.StopWords);
+    _typeMapper = new TypeMapper(_typeNameOverrides, _naming.Overrides, _naming.Acronyms, _naming.StopWords);
     _options = options;
     _formatting = formatting;
     _serialization = serialization ?? new SerializationOptions();
@@ -168,7 +168,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine("/// Main API client for accessing all resources");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine($"public class {_options.ClientClassName}");
+    sb.AppendLine($"public partial class {_options.ClientClassName}");
     sb.AppendLine("{");
 
     // Fields
@@ -406,7 +406,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine($"/// Client for {resource.Name} operations");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine($"public class {clientName}");
+    sb.AppendLine($"public partial class {clientName}");
     sb.AppendLine("{");
 
     // HttpClient field
@@ -1178,7 +1178,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine($"/// Interface for {resource.Name} operations");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine($"public interface {interfaceName}");
+    sb.AppendLine($"public partial interface {interfaceName}");
     sb.AppendLine("{");
 
     Dictionary<string, ApiOperation> generatedMethods = new();
@@ -1269,7 +1269,7 @@ public class ClientGenerator
       sb.AppendLine("/// <summary>");
       sb.AppendLine("/// Standard API response wrapper");
       sb.AppendLine("/// </summary>");
-      sb.AppendLine("public class ApiResponse<T>");
+      sb.AppendLine("public partial class ApiResponse<T>");
       sb.AppendLine("{");
       string dataPropertyName = analysis.ResponsePattern.DataProperty ?? "data";
       sb.AppendLine($"  [JsonPropertyName(\"{dataPropertyName}\")]");
@@ -1434,7 +1434,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine("/// Standard API response wrapper");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine("public class ApiResponse<T>");
+    sb.AppendLine("public partial class ApiResponse<T>");
     sb.AppendLine("{");
     string dataPropertyName = analysis.ResponsePattern.DataProperty ?? "data";
     sb.AppendLine($"  [JsonPropertyName(\"{dataPropertyName}\")]");
@@ -1476,7 +1476,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine("/// Base class for request objects");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine("public abstract class BaseRequest");
+    sb.AppendLine("public abstract partial class BaseRequest");
     sb.AppendLine("{");
     sb.AppendLine("  public virtual string ToQueryString() => string.Empty;");
     sb.AppendLine("}");
@@ -1591,7 +1591,7 @@ public class ClientGenerator
     sb.AppendLine($"/// Request parameters for {operation.Summary}");
     sb.AppendLine($"/// Operation: {operation.Method.ToUpper()} {operation.Path}");
     sb.AppendLine($"/// </summary>");
-    sb.AppendLine($"public class {className} : BaseRequest");
+    sb.AppendLine($"public partial class {className} : BaseRequest");
     sb.AppendLine("{");
 
     // Generate properties
@@ -1655,7 +1655,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine("/// Base class for request objects");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine("public abstract class BaseRequest");
+    sb.AppendLine("public abstract partial class BaseRequest");
     sb.AppendLine("{");
     sb.AppendLine("  public virtual string ToQueryString() => string.Empty;");
     sb.AppendLine("}");
@@ -1694,7 +1694,7 @@ public class ClientGenerator
             sb.AppendLine($"/// Request parameters for {operation.Summary}");
             sb.AppendLine($"/// Operation: {operation.Method.ToUpper()} {operation.Path}");
             sb.AppendLine($"/// </summary>");
-            sb.AppendLine($"public class {className} : BaseRequest");
+            sb.AppendLine($"public partial class {className} : BaseRequest");
             sb.AppendLine("{");
 
             // Generate actual properties for query parameters

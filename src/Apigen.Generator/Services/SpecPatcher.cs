@@ -128,6 +128,9 @@ public class SpecPatcher
     // System.Text.Json is needed for JsonNode/JsonArray/JsonValue in spec patches
     references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Text.Json.dll")));
 
+    // System.Console for diagnostic output from patches
+    references.Add(MetadataReference.CreateFromFile(Path.Combine(runtimeDir, "System.Console.dll")));
+
     return references;
   }
 }

@@ -24,6 +24,34 @@ public class NamingOptions
   /// </summary>
   public Dictionary<string, string> Overrides { get; set; } = new();
 
+  /// <summary>
+  /// Project-specific acronyms merged on top of the generator's built-in
+  /// acronym dictionary (JSON, URL, HTTP, etc.). Use this for domain acronyms
+  /// like HAIP, IP, KVK that aren't generally applicable.
+  ///
+  /// Key is the all-uppercase form as it appears post-PascalCase, value is
+  /// the desired normalized form. Project entries override built-ins on key
+  /// collision.
+  ///
+  /// Example: acronyms = { HAIP = "Haip", IP = "Ip" }
+  /// </summary>
+  public Dictionary<string, string> Acronyms { get; set; } = new();
+
+  /// <summary>
+  /// Project-specific stop-words stripped from natural-language operationIds
+  /// and spec names *before* PascalCase combines tokens. Use for common
+  /// English articles/prepositions that produce awkward identifiers when
+  /// preserved (e.g. "Cancel a HA-IP" -> "CancelAHaip").
+  ///
+  /// Stripping is case-insensitive and only applies to whole tokens (split
+  /// on whitespace and hyphens), never to substrings. If stripping would
+  /// produce an empty result, the original name is used unchanged.
+  ///
+  /// Empty by default (no global behavior change).
+  ///
+  /// Example: stop_words = ["a", "an", "the", "of", "for", "to", "from", "by"]
+  /// </summary>
+  public List<string> StopWords { get; set; } = new();
 }
 
 /// <summary>
