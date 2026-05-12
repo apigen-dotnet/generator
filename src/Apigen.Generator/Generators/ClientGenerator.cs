@@ -168,7 +168,7 @@ public class ClientGenerator
     sb.AppendLine("/// <summary>");
     sb.AppendLine("/// Main API client for accessing all resources");
     sb.AppendLine("/// </summary>");
-    sb.AppendLine($"public partial class {_options.ClientClassName}");
+    sb.AppendLine($"public partial class {_options.ClientClassName} : IDisposable");
     sb.AppendLine("{");
 
     // Fields
