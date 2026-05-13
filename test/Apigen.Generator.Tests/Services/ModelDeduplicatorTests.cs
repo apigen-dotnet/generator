@@ -509,10 +509,10 @@ public class ModelDeduplicatorTests
         ["status"] = new OpenApiSchema
         {
           Type = JsonSchemaType.String,
-          Enum = new List<JsonNode?>
+          Enum = new List<JsonNode>
           {
-            JsonValue.Create("active"),
-            JsonValue.Create("inactive")
+            JsonValue.Create("active")!,
+            JsonValue.Create("inactive")!
           }
         }
       }
@@ -526,10 +526,10 @@ public class ModelDeduplicatorTests
         ["status"] = new OpenApiSchema
         {
           Type = JsonSchemaType.String,
-          Enum = new List<JsonNode?>
+          Enum = new List<JsonNode>
           {
-            JsonValue.Create("active"),
-            JsonValue.Create("deleted")
+            JsonValue.Create("active")!,
+            JsonValue.Create("deleted")!
           }
         }
       }

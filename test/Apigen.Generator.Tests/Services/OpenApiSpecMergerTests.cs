@@ -27,7 +27,7 @@ public class OpenApiSpecMergerTests
 
     var merged = OpenApiSpecMerger.Merge(new[] { doc1, doc2 });
 
-    Assert.Equal(2, merged.Components.Schemas.Count);
+    Assert.Equal(2, merged.Components!.Schemas!.Count);
     Assert.Contains("KdfType", merged.Components.Schemas.Keys);
     Assert.Contains("CipherModel", merged.Components.Schemas.Keys);
   }
@@ -43,8 +43,8 @@ public class OpenApiSpecMergerTests
 
     var merged = OpenApiSpecMerger.Merge(new[] { doc1, doc2 });
 
-    Assert.Single(merged.Components.Schemas);
-    Assert.Contains("UserModel", merged.Components.Schemas.Keys);
+    Assert.Single(merged.Components!.Schemas!);
+    Assert.Contains("UserModel", merged.Components.Schemas!.Keys);
   }
 
   [Fact]
@@ -58,7 +58,7 @@ public class OpenApiSpecMergerTests
 
     var merged = OpenApiSpecMerger.Merge(new[] { doc1, doc2 });
 
-    Assert.Equal(2, merged.Components.Schemas.Count);
+    Assert.Equal(2, merged.Components!.Schemas!.Count);
     Assert.Contains("UserModel", merged.Components.Schemas.Keys);
     // Second one should be prefixed with second word from title
     Assert.Contains("APIUserModel", merged.Components.Schemas.Keys);
@@ -94,7 +94,7 @@ public class OpenApiSpecMergerTests
 
     var merged = OpenApiSpecMerger.Merge(new[] { doc1, doc2 });
 
-    Assert.Equal(2, merged.Components.SecuritySchemes.Count);
+    Assert.Equal(2, merged.Components!.SecuritySchemes!.Count);
   }
 
   [Fact]
@@ -220,10 +220,10 @@ public class OpenApiSpecMergerTests
     return new OpenApiSchema
     {
       Type = JsonSchemaType.Integer,
-      Enum = new List<JsonNode?>
+      Enum = new List<JsonNode>
       {
-        JsonValue.Create(0),
-        JsonValue.Create(1),
+        JsonValue.Create(0)!,
+        JsonValue.Create(1)!,
       }
     };
   }

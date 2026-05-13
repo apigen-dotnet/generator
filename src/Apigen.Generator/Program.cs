@@ -80,6 +80,21 @@ internal class Program
   {
     GeneratorConfiguration config = await LoadConfigurationAsync(configPath);
 
+    // Switch CWD to the project root so relative paths in the TOML
+    // (spec.path, output_path) resolve consistently regardless of where the
+    // generator was invoked from. Convention: TOML lives at <root>/specs/<name>.toml.
+    if (!string.IsNullOrEmpty(configPath))
+    {
+      string configFullPath = Path.GetFullPath(configPath);
+      string projectRoot = GeneratorConfiguration.ResolveProjectRoot(configFullPath);
+      if (!string.Equals(projectRoot, Directory.GetCurrentDirectory(), StringComparison.Ordinal))
+      {
+        Console.WriteLine($"Resolving paths against project root: {projectRoot}");
+        Directory.SetCurrentDirectory(projectRoot);
+      }
+      configPath = configFullPath;
+    }
+
     if (!string.IsNullOrEmpty(specPath))
     {
       config.Specs = new List<SpecConfiguration>

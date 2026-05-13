@@ -91,6 +91,10 @@ public class ClientGenerator
     GeneratedFile jsonConfig = GenerateJsonConfig();
     result.RequestFiles.Add(jsonConfig);
 
+    // Generate ApiException (shared by all clients)
+    GeneratedFile apiException = GenerateApiException();
+    result.RequestFiles.Add(apiException);
+
     // Generate SmartEnumConverter (required by JsonConfig)
     GeneratedFile smartEnumConverter = GenerateSmartEnumConverter();
     result.RequestFiles.Add(smartEnumConverter);
@@ -383,6 +387,7 @@ public class ClientGenerator
     sb.AppendLine("using System.Text;");
     sb.AppendLine("using System.Text.Json;");
     sb.AppendLine("using System.Text.Json.Serialization;");
+    sb.AppendLine("using System.Threading;");
     sb.AppendLine("using System.Threading.Tasks;");
     sb.AppendLine($"using {_options.ModelsNamespace};");
     if (_options.UseILogger)
@@ -788,6 +793,8 @@ public class ClientGenerator
       parameters.Add($"{operationId.ToDotNetPascalCase()}Request? request = null");
     }
 
+    parameters.Add("CancellationToken cancellationToken = default");
+
     return string.Join(", ", parameters);
   }
 
@@ -799,17 +806,51 @@ public class ClientGenerator
   {
     StringBuilder sb = new();
 
-    // Build URL
+    // Build URL (kept outside the try so it remains in scope for the OCE catch)
     string urlBuilder = GenerateUrlBuilder(operation, indent);
     sb.Append(urlBuilder);
 
+    string oneLevel = _formatting.UseSpaces ? new string(' ', _formatting.IndentWidth) : "\t";
+    string innerIndent = indent;
+
+    if (_options.UseILogger)
+    {
+      sb.AppendLine($"{indent}try");
+      sb.AppendLine($"{indent}{{");
+      innerIndent = indent + oneLevel;
+    }
+
     // Make HTTP request
-    string httpCall = GenerateHttpCall(operation, indent);
+    string httpCall = GenerateHttpCall(operation, innerIndent);
     sb.Append(httpCall);
 
     // Process response
-    string responseProcessor = GenerateResponseProcessor(operation, analysis, indent);
+    string responseProcessor = GenerateResponseProcessor(operation, analysis, innerIndent);
     sb.Append(responseProcessor);
+
+    if (_options.UseILogger)
+    {
+      string methodUpper = operation.Method.ToUpperInvariant();
+      sb.AppendLine($"{indent}}}");
+      // Caller-initiated cancellation: distinguished from HttpClient.Timeout via the token state.
+      sb.AppendLine($"{indent}catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}{oneLevel}HttpClientLog.LogDebugRequestCancelled(_logger, \"{methodUpper}\", url);");
+      sb.AppendLine($"{indent}{oneLevel}throw;");
+      sb.AppendLine($"{indent}}}");
+      // HttpClient.Timeout (or some other internal cancellation not initiated by the caller).
+      sb.AppendLine($"{indent}catch (OperationCanceledException ex)");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}{oneLevel}HttpClientLog.LogErrorRequestTimeout(_logger, \"{methodUpper}\", url, ex);");
+      sb.AppendLine($"{indent}{oneLevel}throw;");
+      sb.AppendLine($"{indent}}}");
+      // Transport failures (DNS, connect, TLS, etc.). Exclude our own ApiException so it propagates as-is.
+      sb.AppendLine($"{indent}catch (HttpRequestException ex) when (ex is not ApiException)");
+      sb.AppendLine($"{indent}{{");
+      sb.AppendLine($"{indent}{oneLevel}HttpClientLog.LogErrorTransportFailure(_logger, \"{methodUpper}\", url, ex);");
+      sb.AppendLine($"{indent}{oneLevel}throw;");
+      sb.AppendLine($"{indent}}}");
+    }
 
     return sb.ToString();
   }
@@ -899,7 +940,7 @@ public class ClientGenerator
     switch (operation.Method.ToUpperInvariant())
     {
       case "GET":
-        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.GetAsync(url);");
+        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.GetAsync(url, cancellationToken);");
         break;
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
@@ -918,7 +959,7 @@ public class ClientGenerator
             sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync();");
+              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync(cancellationToken);");
               sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"POST\", \"application/x-www-form-urlencoded\", formBody);");
             }
           }
@@ -931,11 +972,11 @@ public class ClientGenerator
             }
             sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
           }
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PostAsync(url, content);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PostAsync(url, content, cancellationToken);");
         }
         else
         {
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PostAsync(url, null);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PostAsync(url, null, cancellationToken);");
         }
 
         break;
@@ -956,7 +997,7 @@ public class ClientGenerator
             sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
             if (_options.UseILogger)
             {
-              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync();");
+              sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync(cancellationToken);");
               sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"PUT\", \"application/x-www-form-urlencoded\", formBody);");
             }
           }
@@ -969,11 +1010,11 @@ public class ClientGenerator
             }
             sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
           }
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PutAsync(url, content);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PutAsync(url, content, cancellationToken);");
         }
         else
         {
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PutAsync(url, null);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PutAsync(url, null, cancellationToken);");
         }
 
         break;
@@ -989,16 +1030,16 @@ public class ClientGenerator
 
           sb.AppendLine(
             $"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PatchAsync(url, content);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PatchAsync(url, content, cancellationToken);");
         }
         else
         {
-          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PatchAsync(url, null);");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.PatchAsync(url, null, cancellationToken);");
         }
 
         break;
       case "DELETE":
-        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.DeleteAsync(url);");
+        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.DeleteAsync(url, cancellationToken);");
         break;
     }
 
@@ -1016,77 +1057,36 @@ public class ClientGenerator
   private string GenerateResponseProcessor(ApiOperation operation, OpenApiAnalysis analysis, string indent)
   {
     StringBuilder sb = new();
+    string methodUpper = operation.Method.ToUpperInvariant();
+
+    // Status check: on failure, read the error body and throw ApiException with full context.
+    // Read-on-failure only — success path keeps existing memory semantics (no buffering for streams).
+    sb.AppendLine($"{indent}if (!response.IsSuccessStatusCode)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}  string errorBody = await response.Content.ReadAsStringAsync(cancellationToken);");
+    if (_options.UseILogger)
+    {
+      sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{methodUpper}\", url, errorBody, null);");
+    }
+    sb.AppendLine($"{indent}  throw new ApiException(response.StatusCode, \"{methodUpper}\", url, errorBody, response.Headers, response.Content.Headers);");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
 
     // Handle binary responses (application/octet-stream, image/*, etc.)
     if (operation.ResponseType == "Stream")
     {
-      if (_options.UseILogger)
-      {
-        sb.AppendLine($"{indent}try");
-        sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
-        sb.AppendLine($"{indent}}}");
-        sb.AppendLine($"{indent}catch (HttpRequestException ex)");
-        sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}  string errorContent = await response.Content.ReadAsStringAsync();");
-        sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, errorContent, ex);");
-        sb.AppendLine($"{indent}  throw;");
-        sb.AppendLine($"{indent}}}");
-      }
-      else
-      {
-        sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
-      }
-
-      sb.AppendLine($"{indent}return await response.Content.ReadAsStreamAsync();");
+      sb.AppendLine($"{indent}return await response.Content.ReadAsStreamAsync(cancellationToken);");
       return sb.ToString();
     }
 
     // Handle void responses (204 No Content or empty body)
     if (operation.ResponseType == "void")
     {
-      if (_options.UseILogger)
-      {
-        sb.AppendLine($"{indent}try");
-        sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
-        sb.AppendLine($"{indent}}}");
-        sb.AppendLine($"{indent}catch (HttpRequestException ex)");
-        sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}  string responseContent = await response.Content.ReadAsStringAsync();");
-        sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
-        sb.AppendLine($"{indent}  throw;");
-        sb.AppendLine($"{indent}}}");
-      }
-      else
-      {
-        sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
-      }
-
       return sb.ToString();
     }
 
     // For all other responses, read the content
-    sb.AppendLine($"{indent}string responseContent;");
-    if (_options.UseILogger)
-    {
-      sb.AppendLine($"{indent}try");
-      sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}  response.EnsureSuccessStatusCode();");
-      sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
-      sb.AppendLine($"{indent}}}");
-      sb.AppendLine($"{indent}catch (HttpRequestException ex)");
-      sb.AppendLine($"{indent}{{");
-      sb.AppendLine($"{indent}  responseContent = await response.Content.ReadAsStringAsync();");
-      sb.AppendLine($"{indent}  HttpClientLog.LogErrorRequestFailed(_logger, (int)response.StatusCode, \"{operation.Method.ToUpper()}\", url, responseContent, ex);");
-      sb.AppendLine($"{indent}  throw;");
-      sb.AppendLine($"{indent}}}");
-    }
-    else
-    {
-      sb.AppendLine($"{indent}response.EnsureSuccessStatusCode();");
-      sb.AppendLine($"{indent}responseContent = await response.Content.ReadAsStringAsync();");
-    }    sb.AppendLine();
+    sb.AppendLine($"{indent}string responseContent = await response.Content.ReadAsStringAsync(cancellationToken);");
 
     if (_options.UseILogger)
     {
@@ -1161,6 +1161,7 @@ public class ClientGenerator
 
     // File header
     sb.AppendLine("using System.Text.Json;");
+    sb.AppendLine("using System.Threading;");
     sb.AppendLine("using System.Threading.Tasks;");
     sb.AppendLine($"using {_options.ModelsNamespace};");
     sb.AppendLine();
@@ -2386,6 +2387,7 @@ public class ClientGenerator
       {
         foreach (var pathItem in document.Paths)
         {
+          if (pathItem.Value.Operations == null) continue;
           foreach (var pathOp in pathItem.Value.Operations)
           {
             var content = pathOp.Value.RequestBody?.Content?.FirstOrDefault().Value;
@@ -2680,6 +2682,71 @@ public class ClientGenerator
     return new GeneratedFile
     {
       FileName = "FormUrlEncodedContentExtensions.cs",
+      Content = sb.ToString(),
+    };
+  }
+
+  private GeneratedFile GenerateApiException()
+  {
+    StringBuilder sb = new();
+    string indent = _formatting.UseSpaces ? new string(' ', _formatting.IndentWidth) : "\t";
+
+    sb.AppendLine("// <auto-generated />");
+    sb.AppendLine("using System.Net;");
+    sb.AppendLine("using System.Net.Http;");
+    sb.AppendLine("using System.Net.Http.Headers;");
+    sb.AppendLine();
+
+    if (_options.GenerateNullableReferenceTypes)
+    {
+      sb.AppendLine("#nullable enable");
+      sb.AppendLine();
+    }
+
+    sb.AppendLine($"namespace {_options.Namespace};");
+    sb.AppendLine();
+
+    sb.AppendLine("/// <summary>");
+    sb.AppendLine("/// Exception thrown when an API request returns a non-success HTTP status code.");
+    sb.AppendLine("/// Inherits from <see cref=\"HttpRequestException\"/> for backwards compatibility.");
+    sb.AppendLine("/// </summary>");
+    sb.AppendLine("public class ApiException : HttpRequestException");
+    sb.AppendLine("{");
+    sb.AppendLine($"{indent}/// <summary>HTTP method (GET/POST/PUT/PATCH/DELETE).</summary>");
+    sb.AppendLine($"{indent}public string Method {{ get; }}");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}/// <summary>Request URL (relative to the client base address).</summary>");
+    sb.AppendLine($"{indent}public string Url {{ get; }}");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}/// <summary>Raw response body as returned by the server.</summary>");
+    sb.AppendLine($"{indent}public string ResponseBody {{ get; }}");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}/// <summary>Response headers (status-line headers like Date, Server, X-Request-Id, etc.).</summary>");
+    sb.AppendLine($"{indent}public HttpResponseHeaders Headers {{ get; }}");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}/// <summary>Content headers (Content-Type, Content-Length, Content-Disposition, etc.).</summary>");
+    sb.AppendLine($"{indent}public HttpContentHeaders ContentHeaders {{ get; }}");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}public ApiException(");
+    sb.AppendLine($"{indent}{indent}HttpStatusCode statusCode,");
+    sb.AppendLine($"{indent}{indent}string method,");
+    sb.AppendLine($"{indent}{indent}string url,");
+    sb.AppendLine($"{indent}{indent}string responseBody,");
+    sb.AppendLine($"{indent}{indent}HttpResponseHeaders headers,");
+    sb.AppendLine($"{indent}{indent}HttpContentHeaders contentHeaders)");
+    sb.AppendLine($"{indent}{indent}: base($\"{{method}} {{url}} failed with status {{(int)statusCode}} ({{statusCode}})\", inner: null, statusCode: statusCode)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}Method = method;");
+    sb.AppendLine($"{indent}{indent}Url = url;");
+    sb.AppendLine($"{indent}{indent}ResponseBody = responseBody;");
+    sb.AppendLine($"{indent}{indent}Headers = headers;");
+    sb.AppendLine($"{indent}{indent}ContentHeaders = contentHeaders;");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine("}");
+
+    return new GeneratedFile
+    {
+      FileName = "_ApiException.g.cs",
       Content = sb.ToString(),
     };
   }
@@ -3048,6 +3115,44 @@ public class SmartEnumConverterFactory : JsonConverterFactory
     sb.AppendLine($"{indent}{{");
     sb.AppendLine($"{indent}{indent}if (logger != null)");
     sb.AppendLine($"{indent}{indent}{indent}LogTraceRequestBodyCore(logger, method, contentType, body);");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
+
+    // 1004: Request cancelled (Debug)
+    sb.AppendLine($"{indent}[LoggerMessage(EventId = 1004, Level = LogLevel.Debug,");
+    sb.AppendLine($"{indent}{indent}Message = \"{{Method}} request to {{Url}} was cancelled\")]");
+    sb.AppendLine($"{indent}private static partial void LogDebugRequestCancelledCore(ILogger logger, string method, string url);");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}public static void LogDebugRequestCancelled(ILogger? logger, string method, string url)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}if (logger != null)");
+    sb.AppendLine($"{indent}{indent}{indent}LogDebugRequestCancelledCore(logger, method, url);");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
+
+    // 3002: Request timed out (Error). HttpClient.Timeout fires an OperationCanceledException
+    // with the caller's CancellationToken NOT cancelled — distinguished via the when-filter.
+    sb.AppendLine($"{indent}[LoggerMessage(EventId = 3002, Level = LogLevel.Error,");
+    sb.AppendLine($"{indent}{indent}Message = \"{{Method}} request to {{Url}} timed out\")]");
+    sb.AppendLine($"{indent}private static partial void LogErrorRequestTimeoutCore(ILogger logger, string method, string url, Exception exception);");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}public static void LogErrorRequestTimeout(ILogger? logger, string method, string url, Exception exception)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}if (logger != null)");
+    sb.AppendLine($"{indent}{indent}{indent}LogErrorRequestTimeoutCore(logger, method, url, exception);");
+    sb.AppendLine($"{indent}}}");
+    sb.AppendLine();
+
+    // 3003: Transport failure (Error). DNS, connect, TLS, etc. — HttpRequestException
+    // thrown by HttpClient before any HTTP response was received.
+    sb.AppendLine($"{indent}[LoggerMessage(EventId = 3003, Level = LogLevel.Error,");
+    sb.AppendLine($"{indent}{indent}Message = \"Transport failure for {{Method}} {{Url}}: {{ErrorMessage}}\")]");
+    sb.AppendLine($"{indent}private static partial void LogErrorTransportFailureCore(ILogger logger, string method, string url, string errorMessage, Exception exception);");
+    sb.AppendLine();
+    sb.AppendLine($"{indent}public static void LogErrorTransportFailure(ILogger? logger, string method, string url, Exception exception)");
+    sb.AppendLine($"{indent}{{");
+    sb.AppendLine($"{indent}{indent}if (logger != null)");
+    sb.AppendLine($"{indent}{indent}{indent}LogErrorTransportFailureCore(logger, method, url, exception.Message, exception);");
     sb.AppendLine($"{indent}}}");
     sb.AppendLine();
 

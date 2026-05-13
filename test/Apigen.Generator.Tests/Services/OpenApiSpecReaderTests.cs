@@ -66,7 +66,7 @@ public class OpenApiSpecReaderTests
     var document = new OpenApiDocument
     {
       Info = new OpenApiInfo { Title = "Test", Version = "1.0" },
-      Paths = null
+      Paths = null!
     };
 
     // Should not throw

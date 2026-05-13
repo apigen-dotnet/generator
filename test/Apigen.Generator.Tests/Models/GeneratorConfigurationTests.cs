@@ -112,6 +112,140 @@ public class GeneratorConfigurationTests
   }
 
   [Fact]
+  public void ResolveProjectRoot_ConfigInSpecsDir_ReturnsParent()
+  {
+    string tempRoot = Path.Combine(Path.GetTempPath(), $"apigen-root-{Guid.NewGuid()}");
+    string specsDir = Path.Combine(tempRoot, "specs");
+    Directory.CreateDirectory(specsDir);
+    try
+    {
+      string configPath = Path.Combine(specsDir, "foo.toml");
+      File.WriteAllText(configPath, "");
+
+      string root = GeneratorConfiguration.ResolveProjectRoot(configPath);
+
+      Assert.Equal(Path.GetFullPath(tempRoot), root);
+    }
+    finally
+    {
+      Directory.Delete(tempRoot, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ResolveProjectRoot_ConfigNotInSpecsDir_ReturnsConfigDir()
+  {
+    string tempRoot = Path.Combine(Path.GetTempPath(), $"apigen-root-{Guid.NewGuid()}");
+    Directory.CreateDirectory(tempRoot);
+    try
+    {
+      string configPath = Path.Combine(tempRoot, "apigen-config.toml");
+      File.WriteAllText(configPath, "");
+
+      string root = GeneratorConfiguration.ResolveProjectRoot(configPath);
+
+      Assert.Equal(Path.GetFullPath(tempRoot), root);
+    }
+    finally
+    {
+      Directory.Delete(tempRoot, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ResolveProjectRoot_SpecsDirCaseInsensitive_ReturnsParent()
+  {
+    string tempRoot = Path.Combine(Path.GetTempPath(), $"apigen-root-{Guid.NewGuid()}");
+    string specsDir = Path.Combine(tempRoot, "Specs");
+    Directory.CreateDirectory(specsDir);
+    try
+    {
+      string configPath = Path.Combine(specsDir, "foo.toml");
+      File.WriteAllText(configPath, "");
+
+      string root = GeneratorConfiguration.ResolveProjectRoot(configPath);
+
+      Assert.Equal(Path.GetFullPath(tempRoot), root);
+    }
+    finally
+    {
+      Directory.Delete(tempRoot, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ResolveProjectRoot_RelativeConfigPath_ReturnsAbsoluteRoot()
+  {
+    string tempRoot = Path.Combine(Path.GetTempPath(), $"apigen-root-{Guid.NewGuid()}");
+    string specsDir = Path.Combine(tempRoot, "specs");
+    Directory.CreateDirectory(specsDir);
+    string originalCwd = Directory.GetCurrentDirectory();
+    try
+    {
+      string configPath = Path.Combine(specsDir, "foo.toml");
+      File.WriteAllText(configPath, "");
+
+      // CWD-based normalization handles macOS /var -> /private/var symlinks
+      Directory.SetCurrentDirectory(tempRoot);
+      string expectedRoot = Directory.GetCurrentDirectory();
+
+      string root = GeneratorConfiguration.ResolveProjectRoot("specs/foo.toml");
+
+      Assert.Equal(expectedRoot, root);
+    }
+    finally
+    {
+      Directory.SetCurrentDirectory(originalCwd);
+      Directory.Delete(tempRoot, recursive: true);
+    }
+  }
+
+  [Fact]
+  public void ClientGenerationOptions_UseILogger_DefaultsToTrue()
+  {
+    var opts = new ClientGenerationOptions();
+    Assert.True(opts.UseILogger);
+  }
+
+  [Fact]
+  public async Task LoadFromFileAsync_ParsesUseILoggerFalseFromToml()
+  {
+    string toml = "output_path = \"src\"\n\n[[specs]]\npath = \"specs/api.json\"\n\n[models]\nnamespace = \"Test.Models\"\n\n[client]\nuse_ilogger = false\n";
+
+    string tempFile = Path.Combine(Path.GetTempPath(), $"test-{Guid.NewGuid()}.toml");
+    try
+    {
+      await File.WriteAllTextAsync(tempFile, toml);
+      var config = await GeneratorConfiguration.LoadFromFileAsync(tempFile);
+
+      Assert.False(config.Client.UseILogger);
+    }
+    finally
+    {
+      File.Delete(tempFile);
+    }
+  }
+
+  [Fact]
+  public async Task LoadFromFileAsync_ParsesUseILoggerTrueFromToml()
+  {
+    string toml = "output_path = \"src\"\n\n[[specs]]\npath = \"specs/api.json\"\n\n[models]\nnamespace = \"Test.Models\"\n\n[client]\nuse_ilogger = true\n";
+
+    string tempFile = Path.Combine(Path.GetTempPath(), $"test-{Guid.NewGuid()}.toml");
+    try
+    {
+      await File.WriteAllTextAsync(tempFile, toml);
+      var config = await GeneratorConfiguration.LoadFromFileAsync(tempFile);
+
+      Assert.True(config.Client.UseILogger);
+    }
+    finally
+    {
+      File.Delete(tempFile);
+    }
+  }
+
+  [Fact]
   public async Task LoadFromFileAsync_ParsesPropertyOverrideUseGenericOptionalTypeFromToml()
   {
     string toml = "output_path = \"src\"\n\n[[specs]]\npath = \"specs/api.json\"\n\n[models]\nnamespace = \"Test.Models\"\n\n[[property_overrides]]\nproperty_filter = \"^(city|country|state)$\"\nmodel_filter = \"^RandomSearchDto$\"\nuse_generic_optional_type = true\n";

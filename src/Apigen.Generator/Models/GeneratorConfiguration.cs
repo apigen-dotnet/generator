@@ -90,6 +90,28 @@ public class GeneratorConfiguration
   public List<OperationOverride> OperationOverrides { get; set; } = new();
 
   /// <summary>
+  /// Resolve the project root directory for a given config file path.
+  ///
+  /// Convention: client repos put their TOML at <c>&lt;root&gt;/specs/&lt;name&gt;.toml</c>
+  /// and write relative paths (spec path, output_path) relative to <c>&lt;root&gt;</c>.
+  /// So when the config file's directory is named "specs", the project root is its parent;
+  /// otherwise the config file's directory itself is the project root.
+  /// </summary>
+  public static string ResolveProjectRoot(string configPath)
+  {
+    string configFullPath = Path.GetFullPath(configPath);
+    string configDir = Path.GetDirectoryName(configFullPath)
+      ?? throw new ArgumentException($"Cannot determine directory for config path: {configPath}", nameof(configPath));
+
+    if (string.Equals(Path.GetFileName(configDir), "specs", StringComparison.OrdinalIgnoreCase))
+    {
+      return Path.GetDirectoryName(configDir) ?? configDir;
+    }
+
+    return configDir;
+  }
+
+  /// <summary>
   /// Load configuration from a JSON or TOML file
   /// </summary>
   /// <param name="configPath">Path to the configuration file</param>
