@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.3.1] - 2026-05-13
+
+- **Fix**: DELETE (and GET) operations whose OpenAPI spec defines a request body now actually send that body. Previously `HttpClient.DeleteAsync(url, ct)` / `GetAsync(url, ct)` were used unconditionally — there is no overload that accepts content, so the body was silently dropped and the server typically responded `400/406 missing parameter`. Affected operations now generate `SendAsync(new HttpRequestMessage(HttpMethod.Delete|Get, url) { Content = content }, ct)`. Reproduces with TransIP `DELETE /domains/{name}/dns` (`RemoveDnsEntryDomainAsync`) — the `dnsEntry` body is now transmitted correctly. Affected clients: hetzner, immich, transip, vaultwarden, vikunja.
+- Extracted shared `EmitRequestBodyContent` helper for body construction (used by POST/PUT/PATCH and now also DELETE/GET).
+
 ## [2.3.0] - 2026-05-13
 
 - Generated client operations and interfaces now accept a `CancellationToken cancellationToken = default` parameter and propagate it to all `HttpClient` calls (`GetAsync`/`PostAsync`/`PutAsync`/`PatchAsync`/`DeleteAsync`) and to `HttpContent.ReadAsStringAsync`/`ReadAsStreamAsync`. Non-breaking for existing callers (default value).

@@ -921,6 +921,42 @@ public class ClientGenerator
     return sb.ToString();
   }
 
+  /// <summary>
+  /// Emits the construction of a local <c>content</c> variable holding the request body
+  /// (multipart, form-urlencoded, or JSON) plus the corresponding trace-log lines.
+  /// Caller must ensure <c>operation.RequestBodyType</c> is non-empty.
+  /// </summary>
+  private void EmitRequestBodyContent(StringBuilder sb, ApiOperation operation, string indent, string methodUpper)
+  {
+    string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType!)).ToDotNetCamelCase();
+    if (operation.RequestContentType == "multipart/form-data")
+    {
+      sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
+      if (_options.UseILogger)
+      {
+        sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"{methodUpper}\", \"multipart/form-data\", \"[binary content]\");");
+      }
+    }
+    else if (operation.RequestContentType == "application/x-www-form-urlencoded")
+    {
+      sb.AppendLine($"{indent}FormUrlEncodedContent content = {paramName}.ToFormUrlEncodedContent();");
+      if (_options.UseILogger)
+      {
+        sb.AppendLine($"{indent}string formBody = await content.ReadAsStringAsync(cancellationToken);");
+        sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"{methodUpper}\", \"application/x-www-form-urlencoded\", formBody);");
+      }
+    }
+    else
+    {
+      sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
+      if (_options.UseILogger)
+      {
+        sb.AppendLine($"{indent}HttpClientLog.LogTraceRequestBody(_logger, \"{methodUpper}\", \"application/json\", json);");
+      }
+      sb.AppendLine($"{indent}StringContent content = new StringContent(json, Encoding.UTF8, \"application/json\");");
+    }
+  }
+
   private string GenerateHttpCall(ApiOperation operation, string indent)
   {
     StringBuilder sb = new();
@@ -940,7 +976,18 @@ public class ClientGenerator
     switch (operation.Method.ToUpperInvariant())
     {
       case "GET":
-        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.GetAsync(url, cancellationToken);");
+        if (!string.IsNullOrEmpty(operation.RequestBodyType))
+        {
+          // GET with a request body (e.g. Elasticsearch _search). HttpClient has no
+          // GetAsync overload that accepts content, so fall back to SendAsync.
+          EmitRequestBodyContent(sb, operation, indent, "GET");
+          sb.AppendLine($"{indent}HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Get, url) {{ Content = content }};");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cancellationToken);");
+        }
+        else
+        {
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.GetAsync(url, cancellationToken);");
+        }
         break;
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
@@ -1039,7 +1086,18 @@ public class ClientGenerator
 
         break;
       case "DELETE":
-        sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.DeleteAsync(url, cancellationToken);");
+        if (!string.IsNullOrEmpty(operation.RequestBodyType))
+        {
+          // DELETE with a request body (e.g. TransIP DELETE /domains/{name}/dns).
+          // HttpClient has no DeleteAsync overload that accepts content, so fall back to SendAsync.
+          EmitRequestBodyContent(sb, operation, indent, "DELETE");
+          sb.AppendLine($"{indent}HttpRequestMessage httpRequest = new HttpRequestMessage(HttpMethod.Delete, url) {{ Content = content }};");
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.SendAsync(httpRequest, cancellationToken);");
+        }
+        else
+        {
+          sb.AppendLine($"{indent}HttpResponseMessage response = await _httpClient.DeleteAsync(url, cancellationToken);");
+        }
         break;
     }
 
