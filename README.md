@@ -23,11 +23,13 @@ apigen --config my-api.toml
 Apigen uses TOML configuration files. Example:
 
 ```toml
-input_path = "specs/my-api.yaml"
 output_path = "src"
 target_framework = "net10.0"
 generate_nullable_reference_types = true
 generate_data_annotations = true
+
+[[specs]]
+path = "specs/my-api.yaml"
 
 [models]
 namespace = "Apigen.MyApi.Models"
@@ -38,6 +40,19 @@ namespace = "Apigen.MyApi.Client"
 project_name = "Apigen.MyApi.Client"
 client_class_name = "MyApiClient"
 generate_client = true
+```
+
+`[[specs]]` can be repeated to merge several OpenAPI documents into one client, each
+with an optional `path_prefix` that is prepended to every route in that document:
+
+```toml
+[[specs]]
+path = "specs/identity.json"
+path_prefix = "/identity"
+
+[[specs]]
+path = "specs/vault.json"
+path_prefix = "/api"
 ```
 
 ## Features
@@ -84,13 +99,19 @@ This works with any generated client — pass a pre-configured `HttpClient` to t
 
 ## Generated Client Libraries
 
-| API | NuGet Package |
-|-----|--------------|
-| Invoice Ninja v5 | [`Apigen.InvoiceNinja.Client`](https://github.com/apigen-dotnet/invoiceninja) |
-| Keycloak Admin | [`Apigen.Keycloak.Admin.Client`](https://github.com/apigen-dotnet/keycloak) |
-| Paperless-ngx | [`Apigen.PaperlessNgx.Client`](https://github.com/apigen-dotnet/paperless-ngx) |
-| Vikunja | [`Apigen.Vikunja.Client`](https://github.com/apigen-dotnet/vikunja) |
-| Immich | [`Apigen.Immich.Client`](https://github.com/apigen-dotnet/immich) |
+| API | NuGet package | Source |
+|-----|---------------|--------|
+| DEGIRO (unofficial) | [`Apigen.Degiro.Unofficial.Client`](https://www.nuget.org/packages/Apigen.Degiro.Unofficial.Client) | [degiro-unofficial](https://github.com/apigen-dotnet/degiro-unofficial) |
+| Hetzner (Cloud, Robot, API) | [`Apigen.Hetzner`](https://www.nuget.org/packages/Apigen.Hetzner) | [hetzner](https://github.com/apigen-dotnet/hetzner) |
+| Immich | [`Apigen.Immich.Client`](https://www.nuget.org/packages/Apigen.Immich.Client) | [immich](https://github.com/apigen-dotnet/immich) |
+| Invoice Ninja v5 | [`Apigen.InvoiceNinja.Client`](https://www.nuget.org/packages/Apigen.InvoiceNinja.Client) | [invoiceninja](https://github.com/apigen-dotnet/invoiceninja) |
+| Keycloak Admin | [`Apigen.Keycloak.Admin.Client`](https://www.nuget.org/packages/Apigen.Keycloak.Admin.Client) | [keycloak](https://github.com/apigen-dotnet/keycloak) |
+| Paperless-ngx | [`Apigen.PaperlessNgx.Client`](https://www.nuget.org/packages/Apigen.PaperlessNgx.Client) | [paperless-ngx](https://github.com/apigen-dotnet/paperless-ngx) |
+| TransIP | [`Apigen.TransIp.Client`](https://www.nuget.org/packages/Apigen.TransIp.Client) | [transip](https://github.com/apigen-dotnet/transip) |
+| Vaultwarden | [`Apigen.Vaultwarden.Client`](https://www.nuget.org/packages/Apigen.Vaultwarden.Client) | [vaultwarden](https://github.com/apigen-dotnet/vaultwarden) |
+| Vikunja | [`Apigen.Vikunja.Client`](https://www.nuget.org/packages/Apigen.Vikunja.Client) | [vikunja](https://github.com/apigen-dotnet/vikunja) |
+
+All generated clients target `net10.0` — see [docs/target-framework-policy.md](docs/target-framework-policy.md).
 
 ## License
 
