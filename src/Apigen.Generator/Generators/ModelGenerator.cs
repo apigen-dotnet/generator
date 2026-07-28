@@ -161,7 +161,7 @@ public class ModelGenerator
     string projectContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
 
   <PropertyGroup>
-    <TargetFramework>{_options.TargetFramework}</TargetFramework>
+    <TargetFrameworks Condition=""'$(TargetFrameworks)' == ''"">{_options.TargetFramework}</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>{(_options.GenerateNullableReferenceTypes ? "enable" : "disable")}</Nullable>
   </PropertyGroup>

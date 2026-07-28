@@ -1824,7 +1824,9 @@ public class ClientGenerator
     sb.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
     sb.AppendLine();
     sb.AppendLine("  <PropertyGroup>");
-    sb.AppendLine($"    <TargetFramework>{_targetFramework}</TargetFramework>");
+    // Emitted as TargetFrameworks (plural) so multi-targeting is a pure config change.
+    // The condition lets a repo-level Directory.Build.props override the generated default.
+    sb.AppendLine($"    <TargetFrameworks Condition=\"'$(TargetFrameworks)' == ''\">{_targetFramework}</TargetFrameworks>");
     sb.AppendLine("    <ImplicitUsings>enable</ImplicitUsings>");
     sb.AppendLine("    <Nullable>enable</Nullable>");
     sb.AppendLine("  </PropertyGroup>");

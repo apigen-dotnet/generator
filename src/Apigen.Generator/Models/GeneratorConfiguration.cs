@@ -14,7 +14,12 @@ public class GeneratorConfiguration
   /// </summary>
   public List<SpecConfiguration> Specs { get; set; } = new();
   public string OutputPath { get; set; } = "Generated";
-  public string TargetFramework { get; set; } = "net8.0";
+  /// <summary>
+  /// Target framework(s) for generated projects. Use a single TFM (e.g. "net10.0") or a
+  /// semicolon-separated list (e.g. "net10.0;net12.0") to multi-target.
+  /// See docs/target-framework-policy.md for the support policy behind this default.
+  /// </summary>
+  public string TargetFramework { get; set; } = "net10.0";
   public bool GenerateNullableReferenceTypes { get; set; } = true;
   public bool GenerateDataAnnotations { get; set; } = true;
   public CodeFormattingOptions Formatting { get; set; } = new();

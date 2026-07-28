@@ -6,7 +6,7 @@ public class GeneratorOptions
   public string OutputPath { get; set; } = "Generated";
   public string Namespace { get; set; } = "GeneratedApi.Models";
   public string ProjectName { get; set; } = "GeneratedApi.Models";
-  public string TargetFramework { get; set; } = "net8.0";
+  public string TargetFramework { get; set; } = "net10.0";
   public bool GenerateNullableReferenceTypes { get; set; } = true;
   public bool GenerateDataAnnotations { get; set; } = true;
 

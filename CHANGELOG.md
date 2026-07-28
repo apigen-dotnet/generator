@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.0] - 2026-07-28
+
+- Generated project files now emit `<TargetFrameworks>` (plural) instead of `<TargetFramework>`, guarded by `Condition="'$(TargetFrameworks)' == ''"`. Two consequences: multi-targeting (e.g. `net10.0;net12.0`) is now a pure configuration change requiring no generator change, and a repo-level `src/Directory.Build.props` can override the target framework in a way that survives regeneration. MSBuild treats a single-valued `TargetFrameworks` identically to `TargetFramework`, so build output paths are unchanged (`bin/<config>/net10.0/`).
+- **Fix**: the default value of `target_framework` was still `net8.0` (in both `GeneratorConfiguration` and `GeneratorOptions`), while every client repo shipped `net10.0` via an explicit override. Any new client generated without an explicit `target_framework` therefore got a project targeting a framework that reaches end of life on 10 November 2026. The default is now `net10.0`.
+- Added `docs/target-framework-policy.md`, documenting which target frameworks generated clients ship with, why multi-targeting is off by default, and the dates on which the policy must be revisited.
+
 ## [2.3.1] - 2026-05-13
 
 - **Fix**: DELETE (and GET) operations whose OpenAPI spec defines a request body now actually send that body. Previously `HttpClient.DeleteAsync(url, ct)` / `GetAsync(url, ct)` were used unconditionally — there is no overload that accepts content, so the body was silently dropped and the server typically responded `400/406 missing parameter`. Affected operations now generate `SendAsync(new HttpRequestMessage(HttpMethod.Delete|Get, url) { Content = content }, ct)`. Reproduces with TransIP `DELETE /domains/{name}/dns` (`RemoveDnsEntryDomainAsync`) — the `dnsEntry` body is now transmitted correctly. Affected clients: hetzner, immich, transip, vaultwarden, vikunja.
