@@ -60,7 +60,7 @@ This file contains composable instructions for AI agents. It is automatically ge
 1. **Verify CI is green:** `gh run list --repo apigen-dotnet/<repo> --workflow ci.yml --limit 1`
 2. **Verify NuGet secret exists:** `gh secret list --repo apigen-dotnet/<repo>` — must show `NUGET_API_KEY`
 3. **Verify build locally:** `dotnet build --configuration Release` — must be 0 warnings, 0 errors
-4. **Bump version** in `src/Directory.Build.props` — commit and push
+4. **Bump version** — client repos: `src/Directory.Build.props`. Generator repo: `<Version>` in `src/Apigen.Generator/Apigen.Generator.csproj` (it has no `Directory.Build.props`). Commit and push
 5. **Wait for CI to pass** on the version bump commit
 6. **Then tag:** `git tag v<version> && git push origin v<version>`
 
@@ -72,9 +72,17 @@ This file contains composable instructions for AI agents. It is automatically ge
 
 ### What happens when specs/ changes on main
 
-1. `regenerate.yml` triggers on `push: paths: ['specs/**']`
-2. It checks out the generator from `apigen-dotnet/generator` main branch
-3. It runs the generator against the spec and commits the regenerated code
+Nothing automatic. `regenerate.yml` was removed from the client repos; a spec change on
+`main` does **not** regenerate the client. Regeneration is a manual step, run from the
+`apigen-dotnet` superproject:
+
+```
+./generate-all.sh            # all clients
+./generate-all.sh immich     # one client
+```
+
+This means merging a spec update PR leaves the spec and the generated code out of sync
+until someone regenerates, reviews the generated diff, and releases the client.
 
 ### What happens on a weekly schedule (Monday 18:00 UTC)
 

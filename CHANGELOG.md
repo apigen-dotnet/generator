@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.4.1] - 2026-07-28
+
+- **Fix**: the release workflow never published anything to NuGet. It ran `restore` → `build` → `Create GitHub Release`, with no `dotnet pack` and no `dotnet nuget push`, so `Apigen.Generator` on nuget.org was still at 1.0.1 while v2.2.0, v2.3.0, v2.3.1 and v2.4.0 all reported a successful release. Added the missing pack and push steps, and the `.nupkg` is now attached to the GitHub Release as well.
+
 ## [2.4.0] - 2026-07-28
 
 - Generated project files now emit `<TargetFrameworks>` (plural) instead of `<TargetFramework>`, guarded by `Condition="'$(TargetFrameworks)' == ''"`. Two consequences: multi-targeting (e.g. `net10.0;net12.0`) is now a pure configuration change requiring no generator change, and a repo-level `src/Directory.Build.props` can override the target framework in a way that survives regeneration. MSBuild treats a single-valued `TargetFrameworks` identically to `TargetFramework`, so build output paths are unchanged (`bin/<config>/net10.0/`).
