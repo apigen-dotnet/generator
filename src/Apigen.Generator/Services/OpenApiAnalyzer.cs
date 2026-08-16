@@ -13,14 +13,22 @@ namespace Apigen.Generator.Services;
 public class OpenApiAnalyzer
 {
   private readonly TypeMapper _typeMapper;
+  private readonly List<ExcludeOperation> _excludeOperations;
+
+  /// <summary>
+  /// Operations skipped because of an <c>[[exclude_operations]]</c> entry, for reporting.
+  /// </summary>
+  public List<(string Method, string Path, string Reason)> ExcludedOperations { get; } = new();
 
   public OpenApiAnalyzer(
     List<TypeNameOverride>? typeNameOverrides = null,
     Dictionary<string, string>? namingOverrides = null,
     Dictionary<string, string>? projectAcronyms = null,
-    IEnumerable<string>? stopWords = null)
+    IEnumerable<string>? stopWords = null,
+    List<ExcludeOperation>? excludeOperations = null)
   {
     _typeMapper = new TypeMapper(typeNameOverrides, namingOverrides, projectAcronyms, stopWords);
+    _excludeOperations = excludeOperations ?? new List<ExcludeOperation>();
   }
 
   /// <summary>
@@ -180,6 +188,15 @@ public class OpenApiAnalyzer
           continue;
         }
 
+        string httpMethod = operation.Key.Method.ToUpperInvariant();
+        ExcludeOperation? exclusion = _excludeOperations
+          .FirstOrDefault(e => e.Matches(operation.Value.OperationId, path.Key, httpMethod));
+        if (exclusion != null)
+        {
+          ExcludedOperations.Add((httpMethod, path.Key, exclusion.Reason));
+          continue;
+        }
+
         // Use tag as key for deduplication
         if (!resources.ContainsKey(tag))
         {
@@ -197,7 +214,7 @@ public class OpenApiAnalyzer
           Path = path.Key,
           OperationId = operation.Value.OperationId ?? $"{operation.Key.Method.ToTitleCase()}{tag}",
           Summary = operation.Value.Summary ?? "",
-          Type = DetermineOperationType(operation.Key, path.Key, tag),
+          Type = DetermineOperationType(operation.Key, path.Key, tag, operation.Value),
           Parameters = AnalyzeParameters(operation.Value, path.Key, pathItem),
           RequestBodyType = GetRequestBodyType(operation.Value),
           RequestContentType = GetRequestContentType(operation.Value),
@@ -246,27 +263,93 @@ public class OpenApiAnalyzer
   private Models.OperationType DetermineOperationType(
     HttpMethod method,
     string path,
-    string resource)
+    string resource,
+    OpenApiOperation operation)
   {
-    string cleanPath = path.ToLowerInvariant();
+    // Trailing slashes are cosmetic in a route but broke every check below, so an API that
+    // writes /api/documents/{id}/ (Django REST framework does, by default) had no operation
+    // recognised as CRUD and fell back to raw operationIds like "documents_destroy".
+    string cleanPath = path.ToLowerInvariant().TrimEnd('/');
 
-    if (method == HttpMethod.Get && IsListEndpoint(cleanPath, resource)) return Models.OperationType.List;
-    if (method == HttpMethod.Get && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.GetById;
+    // A GET on the collection route is only a List when a collection comes back. Plenty of
+    // resources are a singleton — vaultwarden's GET /api/config returns one ConfigResponseModel,
+    // and calling that ListAsync tells the caller the opposite of what happens.
+    if (method == HttpMethod.Get && IsListEndpoint(cleanPath, resource))
+    {
+      return ReturnsCollection(operation) ? Models.OperationType.List : Models.OperationType.GetById;
+    }
+
+    if (method == HttpMethod.Get && IsGetByIdEndpoint(cleanPath, resource)) return Models.OperationType.GetById;
     if (method == HttpMethod.Post && IsBulkEndpoint(cleanPath)) return Models.OperationType.Bulk;
     if (method == HttpMethod.Post && IsCreateEndpoint(cleanPath, resource)) return Models.OperationType.Create;
-    if (method == HttpMethod.Put && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.Update;
-    if (method == HttpMethod.Delete && IsGetByIdEndpoint(cleanPath)) return Models.OperationType.Delete;
+    if (method == HttpMethod.Put && IsGetByIdEndpoint(cleanPath, resource)) return Models.OperationType.Update;
+    if (method == HttpMethod.Delete && IsGetByIdEndpoint(cleanPath, resource)) return Models.OperationType.Delete;
     return Models.OperationType.Custom;
   }
 
-  private bool IsListEndpoint(string path, string resource)
+  /// <summary>
+  /// True when the success response is a collection: a bare array, or the wrapper object that
+  /// paginated APIs return (paperless-ngx PaginatedDocumentList, hetzner { "servers": [...] }).
+  /// </summary>
+  private bool ReturnsCollection(OpenApiOperation operation)
   {
-    return path == $"/api/v1/{resource}" || path.EndsWith($"/{resource}");
+    var success = operation.Responses?.FirstOrDefault(r => r.Key.StartsWith("2"));
+    IOpenApiSchema? iSchema = success?.Value?.Content?.FirstOrDefault().Value?.Schema;
+    if (iSchema == null)
+    {
+      return false;
+    }
+
+    OpenApiSchema schema = iSchema.ResolveSchema();
+
+    if (schema.IsType(JsonSchemaType.Array))
+    {
+      return true;
+    }
+
+    return schema.Properties?.Values.Any(p => p.ResolveSchema().IsType(JsonSchemaType.Array)) == true;
   }
 
-  private bool IsGetByIdEndpoint(string path)
+  /// <summary>
+  /// The collection route of this resource. The path arrives lowercased, so the resource has to
+  /// be lowercased too: a spec with capitalised tags ("Folders") otherwise matched nothing and
+  /// fell back to raw operationIds like Folders_GetAll.
+  /// </summary>
+  private bool IsListEndpoint(string path, string resource)
   {
-    return Regex.IsMatch(path, @"/\{[^}]+\}$"); // ends with /{id}
+    string normalizedResource = resource.ToLowerInvariant();
+
+    if (path != $"/api/v1/{normalizedResource}" && !path.EndsWith($"/{normalizedResource}"))
+    {
+      return false;
+    }
+
+    // Only the resource's own collection counts. A scoped sub-resource such as
+    // /ciphers/{id}/events also ends in "events", but it is the events *of a cipher*: naming
+    // those List as well produced three ListAsync overloads on the vaultwarden events client
+    // that differed only by request type, which a caller cannot even disambiguate.
+    string prefix = path.Substring(0, path.Length - normalizedResource.Length);
+    return !prefix.Contains('{');
+  }
+
+  /// <summary>
+  /// True for the item route of this resource: <c>/api/documents/{id}</c>. A deeper route that
+  /// happens to end in a parameter — <c>/api/documents/{id}/versions/{version_id}</c> — is a
+  /// different thing and must keep its own name, otherwise deleting a version ends up as
+  /// another "Delete" overload next to deleting the document.
+  /// </summary>
+  private bool IsGetByIdEndpoint(string path, string resource)
+  {
+    Match match = Regex.Match(path, @"/(?<parent>[^/{}]+)/\{[^}]+\}$");
+    if (!match.Success)
+    {
+      return false;
+    }
+
+    string parent = match.Groups["parent"].Value.Replace("_", string.Empty).Replace("-", string.Empty);
+    string normalizedResource = resource.ToLowerInvariant().Replace("_", string.Empty).Replace("-", string.Empty);
+
+    return string.Equals(parent, normalizedResource, StringComparison.OrdinalIgnoreCase);
   }
 
   private bool IsBulkEndpoint(string path)
@@ -274,10 +357,7 @@ public class OpenApiAnalyzer
     return path.Contains("/bulk") || path.Contains("/batch");
   }
 
-  private bool IsCreateEndpoint(string path, string resource)
-  {
-    return path == $"/api/v1/{resource}" || path.EndsWith($"/{resource}");
-  }
+  private bool IsCreateEndpoint(string path, string resource) => IsListEndpoint(path, resource);
 
   private List<ApiParameter> AnalyzeParameters(OpenApiOperation operation, string pathTemplate, OpenApiPathItem pathItem)
   {
@@ -305,6 +385,8 @@ public class OpenApiAnalyzer
             Location = param.In?.ToString().ToLowerInvariant() ?? "query",
             Required = param.Required,
             Description = param.Description,
+            Style = param.Style?.ToString(),
+            Explode = param.Explode,
           });
 
         // Remove from path params set if explicitly defined
@@ -332,6 +414,8 @@ public class OpenApiAnalyzer
               Location = param.In?.ToString().ToLowerInvariant() ?? "query",
               Required = param.Required,
               Description = param.Description,
+              Style = param.Style?.ToString(),
+              Explode = param.Explode,
             });
 
           // Remove from path params set if explicitly defined
@@ -361,6 +445,12 @@ public class OpenApiAnalyzer
     return parameters;
   }
 
+  /// <summary>
+  /// Maps a path/query parameter schema to its CLR type. Uses the same mapper as models and
+  /// responses, so `format` is honoured here too: date-time becomes DateTimeOffset, uuid
+  /// becomes Guid and int64 becomes long instead of everything collapsing to string or int.
+  /// Objects and untyped schemas stay string — as a URL parameter there is nothing better.
+  /// </summary>
   private string GetParameterType(OpenApiSchema? schema)
   {
     if (schema == null)
@@ -368,12 +458,23 @@ public class OpenApiAnalyzer
       return "string";
     }
 
+    if (schema.IsType(JsonSchemaType.Array))
+    {
+      // Named item schemas (enums, objects) are model types living in the models namespace,
+      // and an enum would serialize as its C# name rather than its wire value. Send those
+      // as strings; only inline primitives keep their mapped type.
+      IOpenApiSchema? items = schema.Items;
+      string itemType = items != null && items.GetSchemaReferenceName() == null
+        ? GetParameterType(items.ResolveSchema())
+        : "string";
+
+      return $"List<{itemType}>?";
+    }
+
     return schema.GetEffectiveType() switch
     {
-      JsonSchemaType.Integer => "int",
-      JsonSchemaType.Number => "decimal",
-      JsonSchemaType.Boolean => "bool",
-      JsonSchemaType.Array => "string[]",
+      JsonSchemaType.String or JsonSchemaType.Integer or JsonSchemaType.Number or JsonSchemaType.Boolean
+        => _typeMapper.MapOpenApiTypeToClr(schema, useNullable: false),
       _ => "string",
     };
   }
@@ -439,15 +540,16 @@ public class OpenApiAnalyzer
       return "void";
     }
 
-    // Check if the response is binary (octet-stream, image/*, etc.)
+    var response = successResponse?.Value;
+    var content = response?.Content?.FirstOrDefault().Value;
+
+    // Check if the response is binary: either by content type (octet-stream, zip, image/*, ...)
+    // or by schema (`type: string, format: binary`), which some specs pair with a JSON content type.
     string responseContentType = GetResponseContentType(operation);
-    if (IsBinaryContentType(responseContentType))
+    if (IsBinaryContentType(responseContentType) || IsBinarySchema(content?.Schema))
     {
       return "Stream";
     }
-
-    var response = successResponse?.Value;
-    var content = response?.Content?.FirstOrDefault().Value;
 
     // Check for $ref BEFORE resolving - Reference.Id has the schema name
     string? refName = content?.Schema?.GetSchemaReferenceName();
@@ -498,13 +600,54 @@ public class OpenApiAnalyzer
       return "void";
     }
 
-    // Unknown schema with JSON content - use JsonElement so caller can access dynamic data
+    // Primitive JSON responses (e.g. `type: string`) map to the matching CLR type
     if (schema != null && response?.Content?.Keys.Any(k => k.Contains("json")) == true)
     {
+      string? primitiveType = GetPrimitiveResponseType(schema);
+      if (primitiveType != null)
+      {
+        return primitiveType;
+      }
+
+      // Unknown schema with JSON content - use JsonElement so caller can access dynamic data
       return "JsonElement";
     }
 
     return null;
+  }
+
+  /// <summary>
+  /// Maps a primitive response schema to its CLR type, using the same mapping as generated
+  /// models so both stay in sync. Returns null for objects, arrays, enums and schemas
+  /// without an explicit type.
+  /// </summary>
+  private string? GetPrimitiveResponseType(OpenApiSchema schema)
+  {
+    if (schema.Enum is { Count: > 0 })
+    {
+      return null;
+    }
+
+    bool isPrimitive = schema.IsType(JsonSchemaType.String)
+      || schema.IsType(JsonSchemaType.Integer)
+      || schema.IsType(JsonSchemaType.Number)
+      || schema.IsType(JsonSchemaType.Boolean);
+
+    return isPrimitive ? _typeMapper.MapOpenApiTypeToClr(schema, useNullable: false) : null;
+  }
+
+  /// <summary>
+  /// True when the schema describes raw bytes (`type: string, format: binary`), regardless
+  /// of the declared content type.
+  /// </summary>
+  private static bool IsBinarySchema(IOpenApiSchema? schema)
+  {
+    if (schema is not OpenApiSchema concrete)
+    {
+      return false;
+    }
+
+    return concrete.IsType(JsonSchemaType.String) && concrete.Format == "binary";
   }
 
   private string GetRequestContentType(OpenApiOperation operation)
@@ -520,14 +663,33 @@ public class OpenApiAnalyzer
     return contentType ?? "application/json";
   }
 
-  private bool IsBinaryContentType(string contentType) =>
-    contentType is "application/octet-stream"
-      or "application/pdf"
-      or "image/jpeg" or "image/png" or "image/gif" or "image/webp"
-      or "audio/mpeg" or "video/mp4"
-      || contentType.StartsWith("image/")
-      || contentType.StartsWith("audio/")
-      || contentType.StartsWith("video/");
+  /// <summary>
+  /// A response content type is treated as binary unless it is a known textual type.
+  /// This covers application/octet-stream, application/zip, application/pdf, image/*,
+  /// audio/*, video/* and anything else that cannot be deserialized as text.
+  /// Wildcards (*/*) are not binary: they signal "unspecified", not "bytes".
+  /// </summary>
+  private bool IsBinaryContentType(string contentType)
+  {
+    string mediaType = contentType.Split(';')[0].Trim().ToLowerInvariant();
+
+    if (string.IsNullOrEmpty(mediaType) || mediaType.Contains('*'))
+    {
+      return false;
+    }
+
+    return !IsTextualContentType(mediaType);
+  }
+
+  private static bool IsTextualContentType(string mediaType) =>
+    mediaType.StartsWith("text/")
+      || mediaType.Contains("json")
+      || mediaType.Contains("xml")
+      || mediaType.Contains("yaml")
+      || mediaType.Contains("html")
+      || mediaType.Contains("javascript")
+      || mediaType.Contains("graphql")
+      || mediaType is "application/x-www-form-urlencoded";
 
   private ResponsePattern AnalyzeResponsePatterns(OpenApiDocument document)
   {

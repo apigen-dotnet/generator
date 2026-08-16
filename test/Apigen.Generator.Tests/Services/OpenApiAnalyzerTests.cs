@@ -232,4 +232,162 @@ public class OpenApiAnalyzerTests
 
     Assert.Equal("https://localhost", result.BaseUrl);
   }
+
+  private string? AnalyzeResponseType(string contentType, OpenApiSchema? schema)
+  {
+    OpenApiDocument doc = CreateDocument();
+    doc.Paths["/api/files"] = new OpenApiPathItem
+    {
+      Operations = new Dictionary<HttpMethod, OpenApiOperation>
+      {
+        [HttpMethod.Get] = new OpenApiOperation
+        {
+          OperationId = "files_retrieve",
+          Tags = new HashSet<OpenApiTagReference> { new("files", doc) },
+          Responses = new OpenApiResponses
+          {
+            ["200"] = new OpenApiResponse
+            {
+              Content = new Dictionary<string, IOpenApiMediaType>
+              {
+                [contentType] = new OpenApiMediaType { Schema = schema }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    OpenApiAnalysis result = _analyzer.Analyze(doc);
+    return result.Resources.Single().Operations.Single().ResponseType;
+  }
+
+  [Theory]
+  [InlineData("application/zip")]
+  [InlineData("application/gzip")]
+  [InlineData("application/octet-stream")]
+  [InlineData("application/pdf")]
+  [InlineData("image/png")]
+  [InlineData("application/vnd.ms-excel")]
+  public void Analyze_BinaryContentType_ReturnsStream(string contentType)
+  {
+    Assert.Equal("Stream", AnalyzeResponseType(contentType, new OpenApiSchema { Type = JsonSchemaType.String }));
+  }
+
+  [Theory]
+  [InlineData("application/json")]
+  [InlineData("application/problem+json")]
+  [InlineData("text/plain")]
+  [InlineData("application/xml")]
+  [InlineData("*/*")]
+  public void Analyze_TextualOrWildcardContentType_IsNotStream(string contentType)
+  {
+    Assert.NotEqual("Stream", AnalyzeResponseType(contentType, new OpenApiSchema { Type = JsonSchemaType.String }));
+  }
+
+  [Fact]
+  public void Analyze_BinarySchemaWithJsonContentType_ReturnsStream()
+  {
+    string? responseType = AnalyzeResponseType(
+      "application/json",
+      new OpenApiSchema { Type = JsonSchemaType.String, Format = "binary" });
+
+    Assert.Equal("Stream", responseType);
+  }
+
+  [Theory]
+  [InlineData(JsonSchemaType.String, null, "string")]
+  [InlineData(JsonSchemaType.String, "uuid", "Guid")]
+  [InlineData(JsonSchemaType.String, "date", "DateOnly")]
+  [InlineData(JsonSchemaType.String, "date-time", "DateTimeOffset")]
+  [InlineData(JsonSchemaType.Integer, null, "int")]
+  [InlineData(JsonSchemaType.Integer, "int64", "long")]
+  [InlineData(JsonSchemaType.Number, null, "decimal")]
+  [InlineData(JsonSchemaType.Number, "double", "double")]
+  [InlineData(JsonSchemaType.Boolean, null, "bool")]
+  public void Analyze_PrimitiveJsonResponse_ReturnsClrType(JsonSchemaType type, string? format, string expected)
+  {
+    string? responseType = AnalyzeResponseType(
+      "application/json",
+      new OpenApiSchema { Type = type, Format = format });
+
+    Assert.Equal(expected, responseType);
+  }
+
+  private string AnalyzeParameterType(OpenApiSchema schema)
+  {
+    OpenApiDocument doc = CreateDocument();
+    doc.Paths["/api/items"] = new OpenApiPathItem
+    {
+      Operations = new Dictionary<HttpMethod, OpenApiOperation>
+      {
+        [HttpMethod.Get] = new OpenApiOperation
+        {
+          OperationId = "items_list",
+          Tags = new HashSet<OpenApiTagReference> { new("items", doc) },
+          Parameters = new List<IOpenApiParameter>
+          {
+            new OpenApiParameter { Name = "filter", In = ParameterLocation.Query, Schema = schema }
+          },
+          Responses = new OpenApiResponses { ["204"] = new OpenApiResponse() }
+        }
+      }
+    };
+
+    OpenApiAnalysis result = _analyzer.Analyze(doc);
+    return result.Resources.Single().Operations.Single().Parameters.Single(p => p.Name == "filter").Type;
+  }
+
+  [Theory]
+  [InlineData(JsonSchemaType.String, null, "string")]
+  [InlineData(JsonSchemaType.String, "uuid", "Guid")]
+  [InlineData(JsonSchemaType.String, "date", "DateOnly")]
+  [InlineData(JsonSchemaType.String, "date-time", "DateTimeOffset")]
+  [InlineData(JsonSchemaType.Integer, null, "int")]
+  [InlineData(JsonSchemaType.Integer, "int64", "long")]
+  [InlineData(JsonSchemaType.Boolean, null, "bool")]
+  public void Analyze_ParameterFormat_IsHonoured(JsonSchemaType type, string? format, string expected)
+  {
+    Assert.Equal(expected, AnalyzeParameterType(new OpenApiSchema { Type = type, Format = format }));
+  }
+
+  [Fact]
+  public void Analyze_ArrayParameter_UsesItemType()
+  {
+    string type = AnalyzeParameterType(new OpenApiSchema
+    {
+      Type = JsonSchemaType.Array,
+      Items = new OpenApiSchema { Type = JsonSchemaType.Integer, Format = "int64" }
+    });
+
+    Assert.Equal("List<long>?", type);
+  }
+
+  [Fact]
+  public void Analyze_ArrayParameterWithNamedItemSchema_FallsBackToStringItems()
+  {
+    string type = AnalyzeParameterType(new OpenApiSchema
+    {
+      Type = JsonSchemaType.Array,
+      Items = new OpenApiSchema { Id = "QueueJobStatus", Type = JsonSchemaType.String }
+    });
+
+    Assert.Equal("List<string>?", type);
+  }
+
+  [Fact]
+  public void Analyze_ObjectParameter_FallsBackToString()
+  {
+    Assert.Equal("string", AnalyzeParameterType(new OpenApiSchema { Type = JsonSchemaType.Object }));
+  }
+
+  [Fact]
+  public void Analyze_ObjectJsonResponse_StillReturnsJsonElement()
+  {
+    string? responseType = AnalyzeResponseType(
+      "application/json",
+      new OpenApiSchema { Type = JsonSchemaType.Object });
+
+    Assert.Equal("JsonElement", responseType);
+  }
 }

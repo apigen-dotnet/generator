@@ -124,6 +124,27 @@ public class ApiParameter
   public string Location { get; set; } = string.Empty; // query, path, header
   public bool Required { get; set; }
   public string? Description { get; set; }
+
+  /// <summary>
+  /// OpenAPI serialization style (form, spaceDelimited, pipeDelimited, ...).
+  /// </summary>
+  public string? Style { get; set; }
+
+  /// <summary>
+  /// OpenAPI explode flag. For arrays: true repeats the key (?id=1&amp;id=2),
+  /// false joins the values with the separator belonging to the style (?id=1,2).
+  /// </summary>
+  public bool Explode { get; set; } = true;
+
+  /// <summary>
+  /// Separator for a non-exploded array parameter.
+  /// </summary>
+  public string CollectionSeparator => Style?.ToLowerInvariant() switch
+  {
+    "spacedelimited" => " ",
+    "pipedelimited" => "|",
+    _ => ",",
+  };
 }
 
 /// <summary>

@@ -44,10 +44,66 @@ public class ModelGenerator
   private readonly GeneratorConfiguration _config;
   private readonly HashSet<string> _generatedModels;
   private readonly HashSet<string> _generatedEnums;
+  private readonly GeneratedFileTracker _files;
   private OpenApiDocument? _currentDocument;
 
-  public ModelGenerator(GeneratorOptions options, CodeFormattingOptions? formatting = null)
+  /// <summary>
+  /// Schema that owns the property currently being generated, used to name inline object types.
+  /// </summary>
+  private string _currentModelName = string.Empty;
+
+  /// <summary>
+  /// Structural signature of an inline object schema to the type name generated for it, so the
+  /// same anonymous shape yields one shared type instead of a copy per property.
+  /// </summary>
+  private readonly Dictionary<string, string> _inlineTypeNames = new();
+
+  private readonly Queue<(string Name, OpenApiSchema Schema)> _pendingInlineModels = new();
+
+  /// <summary>
+  /// Signature of every named component schema, so an inline object that happens to describe a
+  /// shape the spec already names is mapped onto that type instead of getting a duplicate with
+  /// a derived name (transip writes its DnsEntry inline inside the request wrapper).
+  /// </summary>
+  private Dictionary<string, string>? _componentSignatures;
+
+  private Dictionary<string, ModelGenerationDecision>? _currentDecisions;
+
+  /// <summary>
+  /// C# type of every property actually written, per generated model. The request model is not
+  /// always generated from the "&lt;Schema&gt;Request" schema — it is often a filtered variant of
+  /// the response schema — so guessing the target type from the spec produces conversions that
+  /// do not compile. This records what was really emitted.
+  /// </summary>
+  private readonly Dictionary<string, Dictionary<string, string>> _generatedProperties = new(StringComparer.Ordinal);
+
+  private string? LookupGeneratedPropertyType(string modelName, string propertyName)
   {
+    return _generatedProperties.TryGetValue(modelName, out Dictionary<string, string>? properties)
+           && properties.TryGetValue(propertyName, out string? type)
+      ? type
+      : null;
+  }
+
+  private void RecordGeneratedProperty(string modelName, string propertyName, string propertyType)
+  {
+    if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(propertyName))
+    {
+      return;
+    }
+
+    if (!_generatedProperties.TryGetValue(modelName, out Dictionary<string, string>? properties))
+    {
+      properties = new Dictionary<string, string>(StringComparer.Ordinal);
+      _generatedProperties[modelName] = properties;
+    }
+
+    properties[propertyName] = propertyType;
+  }
+
+  public ModelGenerator(GeneratorOptions options, CodeFormattingOptions? formatting = null, GeneratedFileTracker? files = null)
+  {
+    _files = files ?? new GeneratedFileTracker();
     _options = options;
     _formatting = formatting ?? new CodeFormattingOptions();
     _config = new GeneratorConfiguration
@@ -62,8 +118,9 @@ public class ModelGenerator
     _generatedEnums = new HashSet<string>();
   }
 
-  public ModelGenerator(GeneratorOptions options, GeneratorConfiguration config)
+  public ModelGenerator(GeneratorOptions options, GeneratorConfiguration config, GeneratedFileTracker? files = null)
   {
+    _files = files ?? new GeneratedFileTracker();
     _options = options;
     _formatting = config.Formatting;
     _config = config;
@@ -127,6 +184,8 @@ public class ModelGenerator
       Console.WriteLine($"Decisions: {splitCount} schemas will split, {unifiedCount} will remain unified, {skippedCount} duplicates skipped");
     }
 
+    _currentDecisions = decisions;
+
     if (document.Components?.Schemas != null)
     {
       foreach (var schema in document.Components.Schemas)
@@ -144,6 +203,14 @@ public class ModelGenerator
 
     // Generate request models from inline request body schemas
     await GenerateRequestModelsAsync(document, outputDir);
+
+    // Generate types for inline object schemas discovered while writing properties. Generating
+    // one can uncover another (an inline object nested in an inline object), hence the queue.
+    while (_pendingInlineModels.Count > 0)
+    {
+      (string inlineName, OpenApiSchema inlineSchema) = _pendingInlineModels.Dequeue();
+      await GenerateModelClassAsync(inlineName, inlineSchema, outputDir);
+    }
 
     // Generate .ToRequest() extension methods if enabled
     if (_options.ModelGeneration.GenerateToRequestExtensions && decisions != null)
@@ -173,7 +240,7 @@ public class ModelGenerator
 </Project>";
 
     string projectPath = Path.Combine(outputDir, $"{_options.ProjectName}.csproj");
-    await File.WriteAllTextAsync(projectPath, projectContent);
+    await _files.WriteAsync(projectPath, projectContent);
   }
 
   private async Task GenerateModelClassAsync(
@@ -449,7 +516,7 @@ public class ModelGenerator
     sb.AppendLine("}");
 
     string filePath = Path.Combine(outputDir, $"{className}.cs");
-    await File.WriteAllTextAsync(filePath, sb.ToString());
+    await _files.WriteAsync(filePath, sb.ToString());
   }
 
   private void GenerateProperty(
@@ -461,6 +528,8 @@ public class ModelGenerator
   {
     // Resolve to concrete schema for attribute/validation access
     OpenApiSchema propertySchema = propertyISchema.ResolveSchema();
+
+    _currentModelName = originalSchemaName;
 
     string propertyNameClean = _typeMapper.GetPropertyName(propertyName);
     // Get the transformed class name for conflict checking
@@ -610,14 +679,17 @@ public class ModelGenerator
     // For Response models (likely deserialized), use = null!; to suppress CS8618
     if (!isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?"))
     {
+      RecordGeneratedProperty(className, propertyNameClean, propertyType);
       sb.AppendLine($"{indent}public {propertyType} {propertyNameClean} {{ get; set; }} = null!;");
     }
     else if (isRequestModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?"))
     {
+      RecordGeneratedProperty(className, propertyNameClean, propertyType);
       sb.AppendLine($"{indent}public required {propertyType} {propertyNameClean} {{ get; set; }}");
     }
     else
     {
+      RecordGeneratedProperty(className, propertyNameClean, propertyType);
       sb.AppendLine($"{indent}public {propertyType} {propertyNameClean} {{ get; set; }}");
     }
   }
@@ -680,7 +752,7 @@ public class ModelGenerator
         }
 
         string converterPath = Path.Combine(outputDir, $"{converterConfig.ConverterType}.cs");
-        await File.WriteAllTextAsync(converterPath, converterContent.ToString());
+        await _files.WriteAsync(converterPath, converterContent.ToString());
       }
     }
   }
@@ -801,7 +873,7 @@ public class ModelGenerator
     sb.AppendLine("}");
 
     string filePath = Path.Combine(outputDir, "_Optional.g.cs");
-    await File.WriteAllTextAsync(filePath, sb.ToString());
+    await _files.WriteAsync(filePath, sb.ToString());
   }
 
   /// <summary>
@@ -885,6 +957,141 @@ public class ModelGenerator
     return GetPropertyType(iSchema.ResolveSchema(), isRequired, originalPropertyName);
   }
 
+  /// <summary>
+  /// True for an anonymous object schema with a declared structure: no $ref, no free-form
+  /// dictionary, but properties of its own.
+  /// </summary>
+  private static bool IsInlineObjectSchema(OpenApiSchema schema)
+  {
+    return string.IsNullOrEmpty(schema.Id)
+           && schema.AdditionalProperties == null
+           && schema.Properties is { Count: > 0 }
+           && (schema.IsType(JsonSchemaType.Object) || schema.Type == null)
+           && (schema.Enum == null || schema.Enum.Count == 0);
+  }
+
+  /// <summary>
+  /// Returns the type name for an inline object schema, generating a new one the first time a
+  /// given structure is seen. Identical structures share a type: paperless-ngx repeats the same
+  /// permissions object on 16 schemas.
+  /// </summary>
+  private string RegisterInlineModel(OpenApiSchema schema, string propertyName)
+  {
+    string signature = GetSchemaSignature(schema);
+
+    if (_inlineTypeNames.TryGetValue(signature, out string? existing))
+    {
+      return existing;
+    }
+
+    string cleanPropertyName = propertyName.Replace("[]", string.Empty);
+
+    InlineTypeName? nameOverride = _config.InlineTypeNames
+      .FirstOrDefault(o => o.Matches(cleanPropertyName, _currentModelName));
+
+    // An explicit name wins; otherwise reuse a named schema with the same structure.
+    if (nameOverride == null && FindNamedSchemaWithSameShape(signature) is { } namedSchema)
+    {
+      _inlineTypeNames[signature] = namedSchema;
+      return namedSchema;
+    }
+
+    string name = nameOverride != null && !string.IsNullOrEmpty(nameOverride.Name)
+      ? nameOverride.Name
+      : $"{_typeMapper.GetClassName(_currentModelName)}{cleanPropertyName.ToDotNetPascalCase()}";
+
+    // Never collide with an existing type: a different structure under the same name would
+    // silently overwrite the other one's file.
+    string uniqueName = name;
+    int suffix = 2;
+    while (_inlineTypeNames.ContainsValue(uniqueName) || _generatedModels.Contains(uniqueName))
+    {
+      uniqueName = $"{name}{suffix++}";
+    }
+
+    _inlineTypeNames[signature] = uniqueName;
+    _pendingInlineModels.Enqueue((uniqueName, schema));
+
+    return uniqueName;
+  }
+
+  /// <summary>
+  /// Class name of a component schema describing exactly this structure, if there is one that
+  /// is generated as a single unified model. Schemas that split into request/response variants
+  /// are skipped: there would be no single type to point at.
+  /// </summary>
+  private string? FindNamedSchemaWithSameShape(string signature)
+  {
+    if (_currentDocument?.Components?.Schemas == null)
+    {
+      return null;
+    }
+
+    if (_componentSignatures == null)
+    {
+      _componentSignatures = new Dictionary<string, string>(StringComparer.Ordinal);
+      foreach (var (name, iSchema) in _currentDocument.Components.Schemas)
+      {
+        OpenApiSchema resolved = iSchema.ResolveSchema();
+        if (!IsInlineObjectSchema(resolved))
+        {
+          continue;
+        }
+
+        _componentSignatures.TryAdd(GetSchemaSignature(resolved), name);
+      }
+    }
+
+    if (!_componentSignatures.TryGetValue(signature, out string? schemaName))
+    {
+      return null;
+    }
+
+    if (_currentDecisions != null &&
+        _currentDecisions.TryGetValue(schemaName, out ModelGenerationDecision? decision) &&
+        (decision.ShouldSplit || decision.ShouldGenerateMethodSpecificModels || decision.SkipGeneration))
+    {
+      return null;
+    }
+
+    return _typeMapper.GetClassName(schemaName);
+  }
+
+  /// <summary>
+  /// Structural fingerprint of a schema, used to recognise repeated anonymous shapes.
+  /// </summary>
+  private static string GetSchemaSignature(OpenApiSchema schema)
+  {
+    StringBuilder sb = new();
+    sb.Append(schema.GetEffectiveType()).Append('|').Append(schema.Format).Append('|');
+
+    if (schema.Items != null)
+    {
+      sb.Append("items(").Append(GetSchemaSignature(schema.Items)).Append(')');
+    }
+
+    if (schema.Properties != null)
+    {
+      foreach (var property in schema.Properties.OrderBy(p => p.Key, StringComparer.Ordinal))
+      {
+        sb.Append(property.Key).Append(':').Append(GetSchemaSignature(property.Value)).Append(';');
+      }
+    }
+
+    if (schema.Required is { Count: > 0 })
+    {
+      sb.Append("req(").Append(string.Join(",", schema.Required.OrderBy(r => r, StringComparer.Ordinal))).Append(')');
+    }
+
+    return sb.ToString();
+  }
+
+  private static string GetSchemaSignature(IOpenApiSchema schema)
+  {
+    string? referenceName = schema.GetSchemaReferenceName();
+    return referenceName != null ? $"$ref:{referenceName}" : GetSchemaSignature(schema.ResolveSchema());
+  }
+
   private string GetPropertyType(OpenApiSchema schema, bool isRequired, string originalPropertyName = "")
   {
     // Check if the property name contains [] indicating it's an array
@@ -925,7 +1132,7 @@ public class ModelGenerator
     // Handle array properties with [] in name - take precedence over OpenAPI array type
     if (isArrayProperty && schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyTypeFromISchema(schema.Items, true);
+      string itemType = GetPropertyTypeFromISchema(schema.Items, true, originalPropertyName.Replace("[]", string.Empty));
       // Remove List<> wrapper and any nullable modifiers, then make it a C# array
       if (itemType.StartsWith("List<") && itemType.EndsWith(">?"))
       {
@@ -946,14 +1153,28 @@ public class ModelGenerator
 
     if (schema.IsType(JsonSchemaType.Array) && schema.Items != null)
     {
-      string itemType = GetPropertyTypeFromISchema(schema.Items, true);
+      string itemType = GetPropertyTypeFromISchema(schema.Items, true, originalPropertyName);
       return $"List<{itemType}>?";
     }
 
     if (schema.IsType(JsonSchemaType.Object) && schema.AdditionalProperties != null)
     {
-      string valueType = GetPropertyTypeFromISchema(schema.AdditionalProperties, true);
+      string valueType = GetPropertyTypeFromISchema(schema.AdditionalProperties, true, originalPropertyName);
       return $"Dictionary<string, {valueType}>?";
+    }
+
+    // An object schema written inline instead of as a component. Mapping it to `object` throws
+    // the declared structure away, so generate a type for it.
+    if (IsInlineObjectSchema(schema))
+    {
+      string inlineType = RegisterInlineModel(schema, originalPropertyName);
+
+      if (isArrayProperty)
+      {
+        return $"{inlineType}[]?";
+      }
+
+      return inlineType + (_options.GenerateNullableReferenceTypes && !isRequired ? "?" : "");
     }
 
     string baseType = _typeMapper.MapOpenApiTypeToClr(schema, _options.GenerateNullableReferenceTypes);
@@ -1117,7 +1338,7 @@ public class ModelGenerator
     sb.AppendLine("}");
 
     string filePath = Path.Combine(outputDir, $"{className}.cs");
-    await File.WriteAllTextAsync(filePath, sb.ToString());
+    await _files.WriteAsync(filePath, sb.ToString());
   }
 
   private async Task GenerateRequestModelsAsync(OpenApiDocument document, string outputDir)
@@ -1297,7 +1518,7 @@ public class ModelGenerator
     sb.AppendLine("}");
 
     string fileName = Path.Combine(outputDir, $"{enumConfig.Name}.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   /// <summary>
@@ -1538,7 +1759,7 @@ public class ModelGenerator
     sb.AppendLine("}");
 
     string fileName = Path.Combine(outputDir, $"{className}.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
 
     // Mark as generated to avoid duplicate generation
     _generatedModels.Add(className);
@@ -1815,7 +2036,7 @@ public class SmartEnumConverterFactory : JsonConverterFactory
 }");
 
     string fileName = Path.Combine(outputDir, "SmartEnumConverter.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   /// <summary>
@@ -1963,7 +2184,7 @@ public static class EnumExtensions
 }");
 
     string fileName = Path.Combine(outputDir, "EnumExtensions.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   private async Task GenerateRequestModelAsync(
@@ -2167,7 +2388,7 @@ public static class EnumExtensions
     sb.AppendLine("}");
 
     string fileName = Path.Combine(outputDir, $"{className}.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   /// <summary>
@@ -2181,6 +2402,8 @@ public static class EnumExtensions
     ModelPurpose purpose,
     string modelName)
   {
+    _currentModelName = modelName;
+
     string propertyNameClean = _typeMapper.GetPropertyName(propertyName);
     string indent = _formatting.GetIndentation();
 
@@ -2270,10 +2493,12 @@ public static class EnumExtensions
     // Response models are deserialized, not manually constructed, so this is semantically correct
     if (purpose == ModelPurpose.Response && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?"))
     {
+      RecordGeneratedProperty(modelName, propertyNameClean, propertyDeclaration);
       sb.AppendLine($"{indent}public {propertyDeclaration} {propertyNameClean} {{ get; set; }} = null!;");
     }
     else
     {
+      RecordGeneratedProperty(modelName, propertyNameClean, propertyDeclaration);
       sb.AppendLine($"{indent}public {propertyDeclaration} {propertyNameClean} {{ get; set; }}");
     }
   }
@@ -2510,7 +2735,7 @@ public static class EnumExtensions
     sb.AppendLine("}");
 
     string fileName = Path.Combine(outputDir, $"{className}.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   private void GeneratePropertyForVariant(
@@ -2521,6 +2746,8 @@ public static class EnumExtensions
     SchemaVariantType variantType,
     string modelName)
   {
+    _currentModelName = modelName;
+
     // Use existing GenerateProperty logic but respect variant type
     string propertyNamePascal = propertyName.ToDotNetPascalCase();
 
@@ -2614,15 +2841,18 @@ public static class EnumExtensions
     // For Request models: Use 'required' keyword for required reference types
     if (isResponseModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?") && !nullSuffix.Contains("?"))
     {
+      RecordGeneratedProperty(modelName, propertyNamePascal, propertyType + nullSuffix);
       sb.AppendLine($"  public {propertyType}{nullSuffix} {propertyNamePascal} {{ get; set; }} = null!;");
     }
     else if (!isResponseModel && isRequired && !IsValueType(propertyType) && !propertyType.EndsWith("?") && !nullSuffix.Contains("?"))
     {
       // Request models use 'required' keyword
+      RecordGeneratedProperty(modelName, propertyNamePascal, propertyType + nullSuffix);
       sb.AppendLine($"  public required {propertyType}{nullSuffix} {propertyNamePascal} {{ get; set; }}");
     }
     else
     {
+      RecordGeneratedProperty(modelName, propertyNamePascal, propertyType + nullSuffix);
       sb.AppendLine($"  public {propertyType}{nullSuffix} {propertyNamePascal} {{ get; set; }}");
     }
     sb.AppendLine();
@@ -2742,9 +2972,14 @@ public static class EnumExtensions
             if (requestProperties.TryGetValue(property.Key, out OpenApiSchema? requestProp) &&
                 !property.Value.WriteOnly)
             {
-              // Compare the final C# types (after property overrides) to ensure compatibility
-              string sourceType = ResolvePropertyType(property.Key, property.Value.ResolveSchema(), false, decision.SchemaName);
-              string targetType = ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
+              string propertyNameForLookup = property.Key.ToDotNetPascalCase();
+
+              // Compare the types that were actually generated. Falling back to the schema is
+              // only for models that were not generated through the recorded paths.
+              string sourceType = LookupGeneratedPropertyType(responseModelName, propertyNameForLookup)
+                ?? ResolvePropertyType(property.Key, property.Value.ResolveSchema(), false, decision.SchemaName);
+              string targetType = LookupGeneratedPropertyType(requestModelName, propertyNameForLookup)
+                ?? ResolvePropertyType(property.Key, requestProp, false, requestSchemaName);
 
               // Check type compatibility for assignment: target = source
               // Exact match always works.
@@ -2777,7 +3012,7 @@ public static class EnumExtensions
     sb.AppendLine("}");
 
     string fileName = Path.Combine(outputDir, "ModelConversionExtensions.cs");
-    await File.WriteAllTextAsync(fileName, sb.ToString());
+    await _files.WriteAsync(fileName, sb.ToString());
   }
 
   /// <summary>

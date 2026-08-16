@@ -25,6 +25,10 @@ public class ClientGenerator
   private readonly string _targetFramework;
   private readonly List<TypeNameOverride> _typeNameOverrides;
   private readonly Dictionary<string, ModelGenerationDecision>? _modelDecisions;
+  private readonly GeneratedFileTracker _files;
+  private readonly HeaderOptions _header;
+  private string _currentSpecPath = string.Empty;
+  private readonly GeneratorConfiguration? _headerConfig;
   private string _commonPathPrefix = "";
   private OpenApiDocument? _currentDocument;
 
@@ -36,11 +40,21 @@ public class ClientGenerator
     string targetFramework = "net8.0",
     List<TypeNameOverride>? typeNameOverrides = null,
     Dictionary<string, ModelGenerationDecision>? modelDecisions = null,
-    SerializationOptions? serialization = null)
+    SerializationOptions? serialization = null,
+    GeneratedFileTracker? files = null,
+    GeneratorConfiguration? config = null)
   {
+    _files = files ?? new GeneratedFileTracker();
+    _header = config?.Header ?? new HeaderOptions();
+    _headerConfig = config;
     _typeNameOverrides = typeNameOverrides ?? new List<TypeNameOverride>();
     _naming = naming ?? new NamingOptions();
-    _analyzer = new OpenApiAnalyzer(_typeNameOverrides, _naming.Overrides, _naming.Acronyms, _naming.StopWords);
+    _analyzer = new OpenApiAnalyzer(
+      _typeNameOverrides,
+      _naming.Overrides,
+      _naming.Acronyms,
+      _naming.StopWords,
+      config?.ExcludeOperations);
     _typeMapper = new TypeMapper(_typeNameOverrides, _naming.Overrides, _naming.Acronyms, _naming.StopWords);
     _options = options;
     _formatting = formatting;
@@ -56,7 +70,17 @@ public class ClientGenerator
   public async Task<GeneratedClientCode> GenerateAsync(OpenApiDocument document, string outputPath)
   {
     _currentDocument = document;
+    _currentSpecPath = _headerConfig?.Specs.FirstOrDefault()?.Path ?? string.Empty;
     OpenApiAnalysis analysis = _analyzer.Analyze(document);
+
+    if (_analyzer.ExcludedOperations.Count > 0)
+    {
+      Console.WriteLine($"  Excluded {_analyzer.ExcludedOperations.Count} operation(s) by configuration:");
+      foreach ((string method, string path, string reason) in _analyzer.ExcludedOperations)
+      {
+        Console.WriteLine($"    {method} {path}{(string.IsNullOrEmpty(reason) ? "" : $" — {reason}")}");
+      }
+    }
 
     // Detect common path prefix from all paths in the document
     _commonPathPrefix = DetectCommonPathPrefix(document);
@@ -189,7 +213,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
+      string propertyName = GetResourcePropertyName(resource.Name);
       sb.AppendLine($"{indent}/// <summary>");
       sb.AppendLine($"{indent}/// Client for {resource.Name} operations");
       sb.AppendLine($"{indent}/// </summary>");
@@ -227,7 +251,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
+      string propertyName = GetResourcePropertyName(resource.Name);
       if (_options.UseILogger)
       {
         sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
@@ -254,7 +278,7 @@ public class ClientGenerator
     foreach (ResourceOperation resource in uniqueResources)
     {
       string clientName = GetResourceClientName(resource.Name);
-      string propertyName = SanitizeOperationId(resource.Name).ToDotNetPascalCase();
+      string propertyName = GetResourcePropertyName(resource.Name);
       if (_options.UseILogger)
       {
         sb.AppendLine($"{indent}{indent}{propertyName} = new {clientName}(_httpClient, _logger);");
@@ -452,7 +476,7 @@ public class ClientGenerator
       string parameters = GenerateMethodParameters(operation);
 
       // Extract just the parameter types for signature checking (not parameter names)
-      string parameterTypes = ExtractParameterTypes(parameters);
+      string parameterTypes = ExtractRequiredParameterTypes(parameters);
       string fullSignature = $"{methodName}({parameterTypes})";
 
       // Check for conflicts
@@ -540,6 +564,9 @@ public class ClientGenerator
     // Only use operation type-based naming if NO override was applied
     if (!overrideApplied)
     {
+      // Bulk operations deliberately keep their operationId: a resource can have several of
+      // them (paperless-ngx has both bulk_download and bulk_edit on documents), so collapsing
+      // them all to "Bulk" produces overloads that differ only by request type.
       baseName = operation.Type switch
       {
         Models.OperationType.List => "List",
@@ -547,19 +574,24 @@ public class ClientGenerator
         Models.OperationType.Create => "Create",
         Models.OperationType.Update => "Update",
         Models.OperationType.Delete => "Delete",
-        Models.OperationType.Bulk => "Bulk",
         _ => operationId.ToDotNetPascalCase(),
       };
-
-      // If we still have conflicts, use path-based naming as fallback
-      if (baseName == "GetinvoicesAsync")
-      {
-        baseName = GenerateMethodNameFromPath(operation);
-      }
 
       // Strip redundant resource name from method name when it's already in the class name
       // E.g., "Getproject" in ProjectClient becomes "Get"
       baseName = StripRedundantResourceName(baseName, resourceName);
+
+      // "Put" is an HTTP verb, not something a .NET caller says. PUT means replace, so the
+      // idiomatic word is Update — vaultwarden's TwoFactor_PutAuthenticator reads far better as
+      // UpdateAuthenticator. POST is deliberately left alone: on a collection it means create,
+      // but on an action route (.../raise-priority) "create" would be plain wrong.
+      if (operation.Method.Equals("PUT", StringComparison.OrdinalIgnoreCase) &&
+          baseName.StartsWith("Put", StringComparison.Ordinal) &&
+          baseName.Length > 3 &&
+          char.IsUpper(baseName[3]))
+      {
+        baseName = "Update" + baseName.Substring(3);
+      }
     }
     else
     {
@@ -570,28 +602,58 @@ public class ClientGenerator
     return _options.UseAsyncSuffix ? $"{baseName}Async" : baseName;
   }
 
+  /// <summary>
+  /// Drops the resource name from a method name when the client class already carries it:
+  /// <c>ClientsClient.BulkClientsAsync</c> becomes <c>BulkAsync</c> and
+  /// <c>ProcessedMailClient.ProcessedMailBulkDeleteAsync</c> becomes <c>BulkDeleteAsync</c>.
+  /// Only one side is stripped, and never everything — <c>DocumentsEmailDocument</c> keeps its
+  /// <c>Document</c> and a method that is nothing but the resource name stays as it is.
+  /// </summary>
   private string StripRedundantResourceName(string methodName, string resourceName)
   {
-    // Normalize both to lowercase for comparison
-    string normalizedMethod = methodName.ToLowerInvariant();
-    string normalizedResource = resourceName.ToLowerInvariant().TrimEnd('s'); // "projects" -> "project"
+    List<string> methodWords = SplitPascalCaseWords(methodName);
+    List<string> resourceWords = SplitPascalCaseWords(resourceName.ToDotNetPascalCase());
 
-    // Common HTTP method prefixes
-    string[] prefixes = { "get", "post", "put", "delete", "patch", "list", "create", "update" };
-
-    foreach (string prefix in prefixes)
+    if (methodWords.Count == 0 || resourceWords.Count == 0)
     {
-      // Check if method name is like "Getproject" and resource is "project"
-      string expectedPattern = prefix + normalizedResource;
-      if (normalizedMethod == expectedPattern)
-      {
-        // Return just the prefix with original casing
-        return prefix.ToDotNetPascalCase();
-      }
+      return methodName;
     }
 
-    // No redundancy found, return original
+    // Leading occurrence: ProcessedMailBulkDelete in resource processed_mail
+    if (methodWords.Count > resourceWords.Count &&
+        MatchesResourceWords(methodWords.Take(resourceWords.Count), resourceWords))
+    {
+      return string.Concat(methodWords.Skip(resourceWords.Count));
+    }
+
+    // Trailing occurrence: BulkClients in resource clients
+    if (methodWords.Count > resourceWords.Count &&
+        MatchesResourceWords(methodWords.Skip(methodWords.Count - resourceWords.Count), resourceWords))
+    {
+      return string.Concat(methodWords.Take(methodWords.Count - resourceWords.Count));
+    }
+
     return methodName;
+  }
+
+  /// <summary>
+  /// Compares word by word, accepting singular and plural as the same word so a "clients"
+  /// resource also matches a "Client" word.
+  /// </summary>
+  private static bool MatchesResourceWords(IEnumerable<string> methodWords, List<string> resourceWords)
+  {
+    return methodWords
+      .Zip(resourceWords, (methodWord, resourceWord) =>
+        string.Equals(methodWord.TrimEnd('s'), resourceWord.TrimEnd('s'), StringComparison.OrdinalIgnoreCase))
+      .All(match => match);
+  }
+
+  private static List<string> SplitPascalCaseWords(string value)
+  {
+    return Regex.Matches(value, @"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|^[a-z0-9]+")
+      .Select(m => m.Value)
+      .Where(word => !string.IsNullOrEmpty(word))
+      .ToList();
   }
 
   private string GenerateOperationId(ApiOperation operation)
@@ -670,8 +732,11 @@ public class ClientGenerator
     }
 
     // Normalize HTTP method: "GET" -> "Get", "POST" -> "Post", etc.
-    // Use existing ToPascalCase extension after lowercasing
-    string methodName = operation.Method.ToLowerInvariant().ToDotNetPascalCase();
+    // PUT becomes Update for the same reason as in GetMethodName: it is the .NET word for what
+    // PUT does, and this fallback would otherwise reintroduce "Put" names.
+    string methodName = operation.Method.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+      ? "Update"
+      : operation.Method.ToLowerInvariant().ToDotNetPascalCase();
 
     // Build method name from path segments with proper normalization
     // Apply the same normalization as we do for operationIds
@@ -712,8 +777,9 @@ public class ClientGenerator
     // Apply type name overrides from configuration (e.g., TaskStatus -> TaskItemStatus)
     baseType = ApplyTypeNameOverrides(baseType);
 
-    // JsonElement doesn't need qualification - it's from System.Text.Json
-    if (baseType != "JsonElement")
+    // JsonElement doesn't need qualification - it's from System.Text.Json,
+    // and neither do primitives (string, int, bool, ...)
+    if (baseType != "JsonElement" && !IsPrimitiveResponseType(baseType))
     {
       // Fully qualify types to avoid namespace conflicts
       baseType = FullyQualifyModelTypes(baseType);
@@ -741,7 +807,7 @@ public class ClientGenerator
     if (!string.IsNullOrEmpty(operation.RequestBodyType))
     {
       // Resolve to canonical schema name if this was deduplicated
-      string resolvedType = ResolveCanonicalSchemaName(operation.RequestBodyType);
+      string resolvedType = ResolveRequestBodyTypeName(operation.RequestBodyType, operation.Method);
 
       string fullyQualifiedType = resolvedType;
 
@@ -928,7 +994,7 @@ public class ClientGenerator
   /// </summary>
   private void EmitRequestBodyContent(StringBuilder sb, ApiOperation operation, string indent, string methodUpper)
   {
-    string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType!)).ToDotNetCamelCase();
+    string paramName = ApplyTypeNameOverrides(ResolveRequestBodyTypeName(operation.RequestBodyType!, operation.Method)).ToDotNetCamelCase();
     if (operation.RequestContentType == "multipart/form-data")
     {
       sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -992,7 +1058,7 @@ public class ClientGenerator
       case "POST":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveRequestBodyTypeName(operation.RequestBodyType, operation.Method)).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -1030,7 +1096,7 @@ public class ClientGenerator
       case "PUT":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveRequestBodyTypeName(operation.RequestBodyType, operation.Method)).ToDotNetCamelCase();
           if (operation.RequestContentType == "multipart/form-data")
           {
             sb.AppendLine($"{indent}MultipartFormDataContent content = {paramName}.ToMultipartContent();");
@@ -1068,7 +1134,7 @@ public class ClientGenerator
       case "PATCH":
         if (!string.IsNullOrEmpty(operation.RequestBodyType))
         {
-          string paramName = ApplyTypeNameOverrides(ResolveCanonicalSchemaName(operation.RequestBodyType)).ToDotNetCamelCase();
+          string paramName = ApplyTypeNameOverrides(ResolveRequestBodyTypeName(operation.RequestBodyType, operation.Method)).ToDotNetCamelCase();
           sb.AppendLine($"{indent}string json = JsonSerializer.Serialize({paramName}, JsonConfig.Default);");
           if (_options.UseILogger)
           {
@@ -1186,6 +1252,23 @@ public class ClientGenerator
         return sb.ToString();
       }
 
+      // Handle primitive responses (e.g. an endpoint returning a bare JSON string or number)
+      if (IsPrimitiveResponseType(fullyQualifiedResponseType) && !analysis.ResponsePattern.IsWrapped)
+      {
+        if (fullyQualifiedResponseType == "string")
+        {
+          sb.AppendLine($"{indent}string? result = JsonSerializer.Deserialize<string>(responseContent, JsonConfig.Default);");
+          sb.AppendLine($"{indent}return result ?? string.Empty;");
+        }
+        else
+        {
+          sb.AppendLine($"{indent}{fullyQualifiedResponseType} result = JsonSerializer.Deserialize<{fullyQualifiedResponseType}>(responseContent, JsonConfig.Default);");
+          sb.AppendLine($"{indent}return result;");
+        }
+
+        return sb.ToString();
+      }
+
       // Fully qualify types to avoid namespace conflicts
       fullyQualifiedResponseType = FullyQualifyModelTypes(fullyQualifiedResponseType);
 
@@ -1249,7 +1332,7 @@ public class ClientGenerator
       string parameters = GenerateMethodParameters(operation);
 
       // Extract just the parameter types for signature checking (not parameter names)
-      string parameterTypes = ExtractParameterTypes(parameters);
+      string parameterTypes = ExtractRequiredParameterTypes(parameters);
       string fullSignature = $"{methodName}({parameterTypes})";
 
       // Check for conflicts
@@ -1698,7 +1781,7 @@ public class ClientGenerator
     {
       string propertyName = param.Name.ToDotNetPascalCase();
       sb.AppendLine($"    if ({propertyName} != null)");
-      sb.AppendLine($"      queryParams[\"{param.Name}\"] = {propertyName};");
+      sb.AppendLine($"      queryParams[\"{param.Name}\"] = {FormatQueryValueExpression(param, propertyName)};");
     }
 
     sb.AppendLine();
@@ -1802,7 +1885,7 @@ public class ClientGenerator
             {
               string propertyName = param.Name.ToDotNetPascalCase();
               sb.AppendLine($"    if ({propertyName} != null)");
-              sb.AppendLine($"      queryParams[\"{param.Name}\"] = {propertyName};");
+              sb.AppendLine($"      queryParams[\"{param.Name}\"] = {FormatQueryValueExpression(param, propertyName)};");
             }
 
             sb.AppendLine();
@@ -1863,37 +1946,50 @@ public class ClientGenerator
     Directory.CreateDirectory(clientPath);
 
     // Write main client
-    await File.WriteAllTextAsync(Path.Combine(clientPath, result.MainClient.FileName), result.MainClient.Content);
+    await WriteGeneratedFileAsync(Path.Combine(clientPath, result.MainClient.FileName), result.MainClient.Content);
 
     // Write resource clients
     foreach (GeneratedFile client in result.ResourceClients)
     {
-      await File.WriteAllTextAsync(Path.Combine(clientPath, client.FileName), client.Content);
+      await WriteGeneratedFileAsync(Path.Combine(clientPath, client.FileName), client.Content);
     }
 
     // Write interfaces
     foreach (GeneratedFile interfaceFile in result.ResourceInterfaces)
     {
-      await File.WriteAllTextAsync(Path.Combine(clientPath, interfaceFile.FileName), interfaceFile.Content);
+      await WriteGeneratedFileAsync(Path.Combine(clientPath, interfaceFile.FileName), interfaceFile.Content);
     }
 
     // Write request files (organized according to strategy)
     foreach (GeneratedFile requestFile in result.RequestFiles)
     {
-      string filePath = Path.Combine(clientPath, requestFile.FileName);
-
-      // Create subdirectories if needed
-      string? directory = Path.GetDirectoryName(filePath);
-      if (!string.IsNullOrEmpty(directory))
-      {
-        Directory.CreateDirectory(directory);
-      }
-
-      await File.WriteAllTextAsync(filePath, requestFile.Content);
+      await WriteGeneratedFileAsync(Path.Combine(clientPath, requestFile.FileName), requestFile.Content);
     }
 
-    // Write project file
-    await File.WriteAllTextAsync(Path.Combine(clientPath, result.ProjectFile.FileName), result.ProjectFile.Content);
+    // Write project file (no C# header)
+    await _files.WriteAsync(Path.Combine(clientPath, result.ProjectFile.FileName), result.ProjectFile.Content);
+  }
+
+  /// <summary>
+  /// Writes a generated C# file with the auto-generated header in front. Besides telling
+  /// readers not to edit it, the header is what lets --prune tell generated files apart from
+  /// hand-written code living in the same project.
+  /// </summary>
+  private async Task WriteGeneratedFileAsync(string filePath, string content)
+  {
+    string header = _header.GenerateHeader(
+      _currentSpecPath,
+      _currentDocument?.Info?.Title,
+      _currentDocument?.Info?.Version,
+      _headerConfig);
+
+    // The header marks the file as auto-generated, and the compiler then demands an explicit
+    // #nullable directive before it accepts nullable annotations (CS8669).
+    string nullableDirective = _options.GenerateNullableReferenceTypes && !content.Contains("#nullable")
+      ? "#nullable enable" + Environment.NewLine + Environment.NewLine
+      : string.Empty;
+
+    await _files.WriteAsync(filePath, header + nullableDirective + content);
   }
 
   // Helper methods
@@ -1969,27 +2065,37 @@ public class ClientGenerator
 
   private string GetResourceClientName(string resourceName)
   {
-    string sanitizedName = SanitizeOperationId(resourceName);
-    string pascalName = sanitizedName.ToDotNetPascalCase();
-
     // Apply type name overrides to resource names (e.g., "Oauth" -> "OAuth")
-    pascalName = ApplyTypeNameOverrides(pascalName);
-
-    return $"{pascalName}Client";
+    return $"{ApplyTypeNameOverrides(GetResourcePropertyName(resourceName), forResource: true)}Client";
   }
 
   private string GetResourceInterfaceName(string resourceName)
   {
-    string sanitizedName = SanitizeOperationId(resourceName);
-    string pascalName = sanitizedName.ToDotNetPascalCase();
-
     // Apply type name overrides to resource names (e.g., "Oauth" -> "OAuth")
-    pascalName = ApplyTypeNameOverrides(pascalName);
-
-    return $"I{pascalName}Client";
+    return $"I{ApplyTypeNameOverrides(GetResourcePropertyName(resourceName), forResource: true)}Client";
   }
 
 
+
+  /// <summary>
+  /// Signature as a caller sees it: optional parameters are dropped, because two methods with
+  /// the same name whose difference is an optional parameter cannot be told apart at the call
+  /// site. Keycloak has 25 of those and vaultwarden had three ListAsync overloads on its events
+  /// client that were literally uncallable.
+  /// </summary>
+  private string ExtractRequiredParameterTypes(string parameters)
+  {
+    if (string.IsNullOrEmpty(parameters))
+    {
+      return string.Empty;
+    }
+
+    IEnumerable<string> required = parameters
+      .Split(',', StringSplitOptions.RemoveEmptyEntries)
+      .Where(part => !part.Contains('='));
+
+    return ExtractParameterTypes(string.Join(",", required));
+  }
 
   private string ExtractParameterTypes(string parameters)
   {
@@ -2144,7 +2250,9 @@ public class ClientGenerator
   /// Fully qualifies model types that might conflict with namespace names.
   /// Detects any type that matches a namespace segment and fully qualifies it.
   /// </summary>
-  private string ApplyTypeNameOverrides(string typeName)
+  private string ApplyTypeNameOverrides(string typeName) => ApplyTypeNameOverrides(typeName, forResource: false);
+
+  private string ApplyTypeNameOverrides(string typeName, bool forResource)
   {
     // Check if the type (without array suffix) matches any configured type name override
     bool isArray = typeName.EndsWith("[]");
@@ -2153,7 +2261,8 @@ public class ClientGenerator
     // Apply type name overrides from configuration
     foreach (TypeNameOverride typeOverride in _typeNameOverrides)
     {
-      if (typeOverride.OriginalName == baseType)
+      if (typeOverride.OriginalName == baseType &&
+          (forResource ? typeOverride.AppliesToResources : typeOverride.AppliesToSchemas))
       {
         baseType = typeOverride.NewName;
         break;
@@ -2165,9 +2274,89 @@ public class ClientGenerator
   }
 
   /// <summary>
+  /// Name of the property that exposes a resource client on the main client
+  /// (<c>client.Tasks</c>).
+  /// </summary>
+  private string GetResourcePropertyName(string resourceName)
+  {
+    return _typeMapper.GetClassName(resourceName, forResource: true).ToDotNetPascalCase();
+  }
+
+  /// <summary>
   /// Resolves a schema name to its canonical form if it was deduplicated.
   /// Returns the original name if no deduplication mapping exists.
   /// </summary>
+  /// <summary>
+  /// Name of the model to use for a request body. A schema that only ever appears in one kind
+  /// of request is generated as that variant alone (vikunja's admin.OwnerPatch exists solely as
+  /// AdminDotOwnerPatchPatchRequest), so referring to the base name yields a type that was
+  /// never generated.
+  /// </summary>
+  private string ResolveRequestBodyTypeName(string schemaName, string httpMethod)
+  {
+    string canonical = ResolveCanonicalSchemaName(schemaName);
+
+    if (_modelDecisions == null)
+    {
+      return canonical;
+    }
+
+    // Decisions are keyed by the raw schema name ("admin.OwnerPatch"); by the time a request
+    // body type reaches here it is already a class name ("AdminDotOwnerPatch").
+    if (!_modelDecisions.TryGetValue(schemaName, out ModelGenerationDecision? decision))
+    {
+      decision = _modelDecisions.Values.FirstOrDefault(d =>
+        string.Equals(_typeMapper.GetClassName(d.SchemaName), schemaName, StringComparison.Ordinal));
+    }
+
+    if (decision == null)
+    {
+      return canonical;
+    }
+
+    if (decision.ShouldGenerateMethodSpecificModels)
+    {
+      string? byMethod = httpMethod.ToUpperInvariant() switch
+      {
+        "POST" => decision.CreateModelName,
+        "PUT" => decision.UpdateModelName,
+        "PATCH" => decision.PatchModelName,
+        _ => null,
+      };
+
+      string? variant = byMethod
+                        ?? decision.CreateModelName
+                        ?? decision.UpdateModelName
+                        ?? decision.PatchModelName;
+
+      return variant != null ? ResolveVariantClassName(decision, variant) : canonical;
+    }
+
+    if (decision.ShouldSplit && decision.RequestModelName != null)
+    {
+      return ResolveVariantClassName(decision, decision.RequestModelName);
+    }
+
+    return canonical;
+  }
+
+  /// <summary>
+  /// Turns a variant name into the class name that was generated for it. Variant names are the
+  /// raw schema name plus a suffix, so the suffix is re-attached to the *converted* schema name:
+  /// a rename of "TaskStatus" to "TaskItemStatus" has to carry over to "TaskItemStatusRequest",
+  /// and "admin.OwnerPatch" has to become "AdminDotOwnerPatch" before "PatchRequest" is added.
+  /// </summary>
+  private string ResolveVariantClassName(ModelGenerationDecision decision, string variantName)
+  {
+    if (variantName.StartsWith(decision.SchemaName, StringComparison.Ordinal))
+    {
+      string suffix = variantName.Substring(decision.SchemaName.Length);
+      return _typeMapper.GetClassName(decision.SchemaName) + suffix;
+    }
+
+    return _typeMapper.GetClassName(variantName);
+  }
+
   private string ResolveCanonicalSchemaName(string schemaName)
   {
     if (_modelDecisions != null &&
@@ -2179,6 +2368,32 @@ public class ClientGenerator
     }
     return schemaName;
   }
+
+  /// <summary>
+  /// True for CLR types that need no namespace qualification and cannot be instantiated
+  /// with <c>new T()</c> as a deserialization fallback.
+  /// </summary>
+  /// <summary>
+  /// Expression that puts a query parameter into the parameter dictionary. Collections are
+  /// passed through when the parameter explodes (the default: ?id=1&amp;id=2) and joined up
+  /// front when it does not (?id=1,2), following the parameter's OpenAPI style.
+  /// </summary>
+  private static string FormatQueryValueExpression(ApiParameter param, string propertyName)
+  {
+    bool isCollection = param.Type.StartsWith("List<") || param.Type.EndsWith("[]");
+
+    if (!isCollection || param.Explode)
+    {
+      return propertyName;
+    }
+
+    return $"QueryStringExtensions.Join({propertyName}, \"{param.CollectionSeparator}\")";
+  }
+
+  private static bool IsPrimitiveResponseType(string type) =>
+    type is "string" or "int" or "long" or "short" or "byte" or "uint" or "ulong" or "ushort" or "sbyte"
+      or "double" or "float" or "decimal" or "bool" or "char"
+      or "DateTimeOffset" or "DateTime" or "DateOnly" or "TimeOnly" or "Guid";
 
   private string FullyQualifyModelTypes(string typeExpression)
   {
@@ -2285,6 +2500,7 @@ public class ClientGenerator
 
     // Add using statements
     sb.AppendLine("using System;");
+    sb.AppendLine("using System.Collections;");
     sb.AppendLine("using System.Collections.Generic;");
     sb.AppendLine("using System.Globalization;");
     sb.AppendLine("using System.Linq;");
@@ -2312,19 +2528,64 @@ public class ClientGenerator
     sb.AppendLine("  {");
     sb.AppendLine("    if (queryParams.Count == 0) return string.Empty;");
     sb.AppendLine();
-    sb.AppendLine("    IEnumerable<string> encodedParams = queryParams.Select(kvp =>");
+    sb.AppendLine("    List<string> encodedParams = new List<string>();");
+    sb.AppendLine();
+    sb.AppendLine("    foreach (KeyValuePair<string, object> kvp in queryParams)");
     sb.AppendLine("    {");
-    sb.AppendLine("      string valueStr = kvp.Value switch");
+    sb.AppendLine("      string encodedKey = HttpUtility.UrlEncode(kvp.Key);");
+    sb.AppendLine();
+    sb.AppendLine("      // Collections repeat the key: ?tag=1&tag=2");
+    sb.AppendLine("      if (kvp.Value is not string && kvp.Value is IEnumerable collection)");
     sb.AppendLine("      {");
-    sb.AppendLine("        null => string.Empty,");
-    sb.AppendLine("        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),");
-    sb.AppendLine("        _ => kvp.Value.ToString() ?? string.Empty");
-    sb.AppendLine("      };");
-    sb.AppendLine("      return $\"{HttpUtility.UrlEncode(kvp.Key)}={HttpUtility.UrlEncode(valueStr)}\";");
-    sb.AppendLine("    });");
+    sb.AppendLine("        foreach (object? item in collection)");
+    sb.AppendLine("        {");
+    sb.AppendLine("          if (item == null) continue;");
+    sb.AppendLine("          encodedParams.Add($\"{encodedKey}={HttpUtility.UrlEncode(FormatValue(item))}\");");
+    sb.AppendLine("        }");
+    sb.AppendLine();
+    sb.AppendLine("        continue;");
+    sb.AppendLine("      }");
+    sb.AppendLine();
+    sb.AppendLine("      encodedParams.Add($\"{encodedKey}={HttpUtility.UrlEncode(FormatValue(kvp.Value))}\");");
+    sb.AppendLine("    }");
+    sb.AppendLine();
+    sb.AppendLine("    if (encodedParams.Count == 0) return string.Empty;");
     sb.AppendLine();
     sb.AppendLine("    return \"?\" + string.Join(\"&\", encodedParams);");
     sb.AppendLine("  }");
+    sb.AppendLine();
+    sb.AppendLine("  /// <summary>");
+    sb.AppendLine("  /// Joins a collection into a single query value, for parameters that do not explode");
+    sb.AppendLine("  /// (OpenAPI style form/spaceDelimited/pipeDelimited with explode: false).");
+    sb.AppendLine("  /// </summary>");
+    sb.AppendLine("  public static string Join(IEnumerable values, string separator)");
+    sb.AppendLine("  {");
+    sb.AppendLine("    List<string> formatted = new List<string>();");
+    sb.AppendLine("    foreach (object? item in values)");
+    sb.AppendLine("    {");
+    sb.AppendLine("      if (item == null) continue;");
+    sb.AppendLine("      formatted.Add(FormatValue(item));");
+    sb.AppendLine("    }");
+    sb.AppendLine();
+    sb.AppendLine("    return string.Join(separator, formatted);");
+    sb.AppendLine("  }");
+    sb.AppendLine();
+    sb.AppendLine("  /// <summary>");
+    sb.AppendLine("  /// Formats a single value for use in a URL. Dates are written as ISO 8601 and");
+    sb.AppendLine("  /// booleans lowercase; numbers use invariant culture so a comma never sneaks in.");
+    sb.AppendLine("  /// </summary>");
+    sb.AppendLine("  private static string FormatValue(object? value) => value switch");
+    sb.AppendLine("  {");
+    sb.AppendLine("    null => string.Empty,");
+    sb.AppendLine("    string s => s,");
+    sb.AppendLine("    bool b => b ? \"true\" : \"false\",");
+    sb.AppendLine("    DateTimeOffset dto => dto.ToString(\"o\", CultureInfo.InvariantCulture),");
+    sb.AppendLine("    DateTime dt => dt.ToString(\"o\", CultureInfo.InvariantCulture),");
+    sb.AppendLine("    DateOnly d => d.ToString(\"yyyy-MM-dd\", CultureInfo.InvariantCulture),");
+    sb.AppendLine("    TimeOnly t => t.ToString(\"HH:mm:ss\", CultureInfo.InvariantCulture),");
+    sb.AppendLine("    IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),");
+    sb.AppendLine("    _ => value.ToString() ?? string.Empty");
+    sb.AppendLine("  };");
     sb.AppendLine();
     sb.AppendLine("  /// <summary>");
     sb.AppendLine("  /// Builds a URL from a template string by safely substituting parameters and appending query string");
@@ -2370,13 +2631,7 @@ public class ClientGenerator
     sb.AppendLine("        string paramName = template.Substring(openBrace + 1, closeBrace - openBrace - 1);");
     sb.AppendLine("        if (pathParams.TryGetValue(paramName, out object? paramValue))");
     sb.AppendLine("        {");
-    sb.AppendLine("          string valueStr = paramValue switch");
-    sb.AppendLine("          {");
-    sb.AppendLine("            null => string.Empty,");
-    sb.AppendLine("            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),");
-    sb.AppendLine("            _ => paramValue.ToString() ?? string.Empty");
-    sb.AppendLine("          };");
-    sb.AppendLine("          result.Append(Uri.EscapeDataString(valueStr));");
+    sb.AppendLine("          result.Append(Uri.EscapeDataString(FormatValue(paramValue)));");
     sb.AppendLine("        }");
     sb.AppendLine("        else");
     sb.AppendLine("        {");
@@ -2526,6 +2781,11 @@ public class ClientGenerator
         OpenApiSchema propSchema = prop.Value.ResolveSchema();
         string clrType = _typeMapper.MapOpenApiTypeToClr(propSchema);
         string pascalName = _typeMapper.GetPropertyName(propKey);
+
+        // A $ref to an enum resolves to its underlying string type here, while the model
+        // property is generated as the enum. Serializing through JsonConfig yields the value
+        // the API expects ("archive"), where ToString() would send the C# name ("Archive").
+        bool isEnumProperty = prop.Value.GetSchemaReferenceName() != null && propSchema.Enum is { Count: > 0 };
         bool isRequired = requiredProps.Contains(propKey);
         bool isNullable = propSchema.IsNullable() || !isRequired;
 
@@ -2535,7 +2795,12 @@ public class ClientGenerator
 
         bool isBinary = clrType.StartsWith("byte[]");
 
-        if (isBinary)
+        if (isEnumProperty)
+        {
+          sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+          sb.AppendLine($"      content.Add(new StringContent(JsonSerializer.Serialize({paramName}.{pascalName}, JsonConfig.Default).Trim('\"')), \"{propKey}\");");
+        }
+        else if (isBinary)
         {
           // Binary properties get added as file content with filename
           string defaultFilename = $"{propKey}.bin";
@@ -2633,16 +2898,9 @@ public class ClientGenerator
         }
         else
         {
-          // Enum or other reference types: use ToString or JSON serialize
-          if (isNullable)
-          {
-            sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
-            sb.AppendLine($"      content.Add(new StringContent({paramName}.{pascalName}.ToString() ?? \"\"), \"{propKey}\");");
-          }
-          else
-          {
-            sb.AppendLine($"    content.Add(new StringContent({paramName}.{pascalName}.ToString() ?? \"\"), \"{propKey}\");");
-          }
+          // Enums and other reference types: serialize so converters decide the wire format
+          sb.AppendLine($"    if ({paramName}.{pascalName} != null)");
+          sb.AppendLine($"      content.Add(new StringContent(JsonSerializer.Serialize({paramName}.{pascalName}, JsonConfig.Default).Trim('\"')), \"{propKey}\");");
         }
       }
 

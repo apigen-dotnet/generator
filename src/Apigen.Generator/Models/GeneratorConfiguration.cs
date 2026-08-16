@@ -22,6 +22,14 @@ public class GeneratorConfiguration
   public string TargetFramework { get; set; } = "net10.0";
   public bool GenerateNullableReferenceTypes { get; set; } = true;
   public bool GenerateDataAnnotations { get; set; } = true;
+
+  /// <summary>
+  /// Delete generated files in the output directories that this run did not produce.
+  /// Removes leftovers from schemas or operations that disappeared from the spec.
+  /// Files without an auto-generated header are never deleted. Can also be enabled per
+  /// run with the <c>--prune</c> flag.
+  /// </summary>
+  public bool Prune { get; set; } = false;
   public CodeFormattingOptions Formatting { get; set; } = new();
 
   /// <summary>
@@ -53,6 +61,12 @@ public class GeneratorConfiguration
   /// Type name overrides - allows renaming conflicting type names
   /// </summary>
   public List<TypeNameOverride> TypeNameOverrides { get; set; } = new();
+
+  /// <summary>
+  /// Names for anonymous inline object schemas, overriding the name derived from the parent
+  /// schema and property name.
+  /// </summary>
+  public List<InlineTypeName> InlineTypeNames { get; set; } = new();
 
   /// <summary>
   /// Header generation options
@@ -93,6 +107,11 @@ public class GeneratorConfiguration
   /// Operation overrides for adding fixed parameters and modifying behavior
   /// </summary>
   public List<OperationOverride> OperationOverrides { get; set; } = new();
+
+  /// <summary>
+  /// Operations to leave out of the generated client entirely.
+  /// </summary>
+  public List<ExcludeOperation> ExcludeOperations { get; set; } = new();
 
   /// <summary>
   /// Resolve the project root directory for a given config file path.

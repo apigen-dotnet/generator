@@ -42,6 +42,26 @@ client_class_name = "MyApiClient"
 generate_client = true
 ```
 
+### Pruning stale output
+
+The models project is rewritten from scratch on every run, but the client project is not:
+files for operations that disappeared from the spec keep lingering and keep compiling.
+Enable pruning to delete generated `.cs` files that the current run did not produce:
+
+```bash
+apigen --config my-api.toml --prune
+```
+
+or permanently, in the config:
+
+```toml
+prune = true
+```
+
+Pruning only touches the models and client project directories, skips `bin/`and `obj/`,
+and prints every file it deletes. Those directories are owned by the generator — keep
+hand-written code (partial classes, extensions) in a separate project.
+
 `[[specs]]` can be repeated to merge several OpenAPI documents into one client, each
 with an optional `path_prefix` that is prepended to every route in that document:
 
@@ -61,11 +81,15 @@ path_prefix = "/api"
 - Property overrides with regex matching to fix API spec inaccuracies
 - Custom JSON converters (inline or file-based) for handling API quirks
 - Smart enum generation with string serialization
-- Binary response support (`Stream`) for file downloads, thumbnails, etc.
+- Binary response support (`Stream`) for file downloads, thumbnails, archives, etc.
+- Primitive response types (`string`, `int`, `bool`, ...) instead of `JsonElement`
+- Offset-preserving date handling: `date-time` → `DateTimeOffset`, `date` → `DateOnly`
+- Optional pruning of generated files left over from a previous run
 - Multipart form-data upload support for file upload endpoints
 - Multiple authentication methods (API key, Bearer, Cookie, Basic) via static factory methods
 - Request/Response model splitting with deduplication
 - Type name overrides for conflict resolution
+- Named types for inline object schemas, deduplicated across schemas
 - Configurable code formatting and naming conventions
 - ILogger integration for request/response logging
 

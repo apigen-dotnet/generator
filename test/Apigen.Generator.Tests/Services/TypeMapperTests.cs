@@ -31,23 +31,23 @@ public class TypeMapperTests
   }
 
   [Fact]
-  public void MapOpenApiTypeToClr_StringDateTimeFormat_ReturnsNullableDateTime()
+  public void MapOpenApiTypeToClr_StringDateTimeFormat_ReturnsNullableDateTimeOffset()
   {
     OpenApiSchema schema = new() { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "date-time" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
-    Assert.Equal("DateTime?", result);
+    Assert.Equal("DateTimeOffset?", result);
   }
 
   [Fact]
-  public void MapOpenApiTypeToClr_StringDateTimeFormat_NonNullable_ReturnsDateTime()
+  public void MapOpenApiTypeToClr_StringDateTimeFormat_NonNullable_ReturnsDateTimeOffset()
   {
     OpenApiSchema schema = new() { Type = JsonSchemaType.String, Format = "date-time" };
 
     string result = _mapper.MapOpenApiTypeToClr(schema);
 
-    Assert.Equal("DateTime", result);
+    Assert.Equal("DateTimeOffset", result);
   }
 
   [Fact]

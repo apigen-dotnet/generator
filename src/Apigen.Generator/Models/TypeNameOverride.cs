@@ -28,6 +28,20 @@ public class TypeNameOverride
   /// </summary>
   public string? Reason { get; set; }
 
+  /// <summary>
+  /// Where the override applies: <c>schemas</c> (model type names), <c>resources</c> (the
+  /// resource clients and their properties on the main client) or <c>both</c> (default).
+  ///
+  /// Both are needed in practice — "Oauth" to "OAuth" is meant for the resource client, while
+  /// renaming a schema that happens to share its name with a tag (paperless-ngx has both a
+  /// "Tasks" schema and a "tasks" tag) must not rename <c>client.Tasks</c> along with it.
+  /// </summary>
+  public string AppliesTo { get; set; } = "both";
+
+  public bool AppliesToSchemas => !string.Equals(AppliesTo, "resources", StringComparison.OrdinalIgnoreCase);
+
+  public bool AppliesToResources => !string.Equals(AppliesTo, "schemas", StringComparison.OrdinalIgnoreCase);
+
   private Regex? _compiledPattern;
 
   /// <summary>

@@ -82,7 +82,11 @@ public class TypeMapper
     {
       if (schema.Format == "date-time")
       {
-        return $"DateTime{nullable}";
+        // DateTimeOffset, not DateTime: OpenAPI's date-time is RFC 3339, so the value
+        // carries a UTC offset. System.Text.Json converts such a value into a local-time
+        // DateTime, which silently discards the offset and makes the result depend on the
+        // machine's time zone. DateTimeOffset round-trips the original value.
+        return $"DateTimeOffset{nullable}";
       }
 
       if (schema.Format == "date")
@@ -223,7 +227,14 @@ public class TypeMapper
     return cleanName.ToDotNetPascalCase();
   }
 
-  public string GetClassName(string name)
+  public string GetClassName(string name) => GetClassName(name, forResource: false);
+
+  /// <summary>
+  /// Converts a spec name into a C# type name. <paramref name="forResource"/> selects which
+  /// type name overrides apply: resource clients and model types are named separately, so an
+  /// override can be scoped to one of them.
+  /// </summary>
+  public string GetClassName(string name, bool forResource)
   {
     if (string.IsNullOrEmpty(name))
     {
@@ -232,7 +243,8 @@ public class TypeMapper
 
     // Step 0: Apply type name overrides FIRST (before any transformations)
     // This allows custom mappings like "models.Permission" -> "Permission"
-    TypeNameOverride? typeOverride = _typeNameOverrides.FirstOrDefault(o => o.Matches(name));
+    TypeNameOverride? typeOverride = _typeNameOverrides.FirstOrDefault(o =>
+      o.Matches(name) && (forResource ? o.AppliesToResources : o.AppliesToSchemas));
     if (typeOverride != null)
     {
       name = typeOverride.Apply(name);

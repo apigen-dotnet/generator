@@ -38,13 +38,19 @@ internal class Program
       Description = "Write patched spec for diagnosis"
     };
 
+    Option<bool> pruneOption = new("--prune")
+    {
+      Description = "Delete generated files left over from a previous run"
+    };
+
     RootCommand rootCommand = new("OpenAPI to C# client generator")
     {
       specArg,
       outputArg,
       namespaceArg,
       configOption,
-      savePatchedOption
+      savePatchedOption,
+      pruneOption
     };
 
     rootCommand.SetAction(parseResult =>
@@ -54,8 +60,9 @@ internal class Program
       string? ns = parseResult.GetValue(namespaceArg);
       string? config = parseResult.GetValue(configOption);
       bool savePatched = parseResult.GetValue(savePatchedOption);
+      bool prune = parseResult.GetValue(pruneOption);
 
-      RunGeneratorAsync(spec, output, ns, config, savePatched).GetAwaiter().GetResult();
+      RunGeneratorAsync(spec, output, ns, config, savePatched, prune).GetAwaiter().GetResult();
     });
 
     Command createConfigCommand = new("create-config")
@@ -76,9 +83,15 @@ internal class Program
     string? outputPath,
     string? namespaceName,
     string? configPath,
-    bool savePatched)
+    bool savePatched,
+    bool prune)
   {
     GeneratorConfiguration config = await LoadConfigurationAsync(configPath);
+
+    if (prune)
+    {
+      config.Prune = true;
+    }
 
     // Switch CWD to the project root so relative paths in the TOML
     // (spec.path, output_path) resolve consistently regardless of where the
@@ -178,13 +191,17 @@ internal class Program
         Console.WriteLine($"Found {document.Paths?.Count ?? 0} paths, {document.Components?.Schemas?.Count ?? 0} schemas (after patches)");
       }
 
+      GeneratedFileTracker files = new();
+      List<string> outputDirectories = new() { Path.Combine(config.OutputPath, config.Models.ProjectName) };
+
       // Generate models
-      ModelGenerator modelGenerator = new(options, config);
+      ModelGenerator modelGenerator = new(options, config, files);
       Dictionary<string, ModelGenerationDecision>? modelDecisions = await modelGenerator.GenerateModelsAsync(document);
 
       // Generate API client if requested
       if (config.Client.GenerateClient)
       {
+        outputDirectories.Add(Path.Combine(config.OutputPath, config.Client.ProjectName));
         Console.WriteLine("Generating API client...");
         config.Client.ModelsNamespace = config.Models.Namespace;
         config.Client.ResponseTypeOverrides = config.ResponseTypeOverrides;
@@ -196,9 +213,26 @@ internal class Program
           config.TargetFramework,
           config.TypeNameOverrides,
           modelDecisions,
-          config.Serialization);
+          config.Serialization,
+          files,
+          config);
         GeneratedClientCode clientCode = await clientGenerator.GenerateAsync(document, config.OutputPath);
         Console.WriteLine($"API client generated: {Path.Combine(config.OutputPath, config.Client.ProjectName)}");
+      }
+
+      if (config.Prune)
+      {
+        PruneResult pruned = files.Prune(outputDirectories);
+        Console.WriteLine($"Pruned {pruned.Deleted.Count} stale file(s)");
+        foreach (string deleted in pruned.Deleted)
+        {
+          Console.WriteLine($"  Deleted: {Path.GetRelativePath(Directory.GetCurrentDirectory(), deleted)}");
+        }
+
+        foreach (string kept in pruned.Kept)
+        {
+          Console.WriteLine($"  Kept (no auto-generated header): {Path.GetRelativePath(Directory.GetCurrentDirectory(), kept)}");
+        }
       }
 
       Console.WriteLine("Code generation completed successfully!");
